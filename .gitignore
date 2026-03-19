@@ -1,0 +1,48 @@
+# Виртуальное окружение
+venv/
+env/
+.venv/
+
+# Базы данных
+*.db
+*.sqlite3
+casino.db
+
+# Логи и CSV
+*.log
+agreements_log.csv
+
+# Кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Файлы с секретами (если случайно создадите)
+.env
+.env.local
+*.env
+
+# Настройки редакторов
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Временные файлы
+temp/
+tmp/
+*.tmp
+*.bak
+
+# Файлы сборки/дистрибуции (если есть)
+dist/
+build/
+*.egg-info/
+
+# Другие возможные файлы
+.coverage
+htmlcov/
+.tox/
