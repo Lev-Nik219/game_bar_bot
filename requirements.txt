@@ -1,0 +1,4 @@
+aiogram==3.17.0
+aiosqlite==0.20.0
+crypto-pay-api-sdk
+flask==3.0.3
