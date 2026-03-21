@@ -1,5 +1,4 @@
 asyncpg==0.30.0
-pydantic==2.10.6
 aiogram==3.17.0
-flask==3.0.3
 crypto-pay-api-sdk
+flask==3.0.3

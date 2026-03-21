@@ -9,24 +9,21 @@ DB_URL = os.getenv('DATABASE_URL', 'postgresql://localhost/casino')
 _pool = None
 
 async def init_db_pool():
-    """Инициализирует пул соединений с PostgreSQL."""
     global _pool
     if _pool is None:
         _pool = await asyncpg.create_pool(DB_URL, min_size=1, max_size=10)
     return _pool
 
 async def close_db_pool():
-    """Закрывает пул соединений."""
     global _pool
     if _pool:
         await _pool.close()
         _pool = None
 
 async def create_db():
-    """Создаёт таблицы, если их нет."""
     pool = await init_db_pool()
     async with pool.acquire() as conn:
-        # Таблица пользователей
+        # Таблица users
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -154,7 +151,7 @@ async def create_db():
                 active INTEGER DEFAULT 1
             )
         ''')
-        # Таблица уведомлений (для будущего использования)
+        # Уведомления (для будущего)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS notifications (
                 id SERIAL PRIMARY KEY,
@@ -231,11 +228,10 @@ async def create_db():
                 FOREIGN KEY (chat_id) REFERENCES admin_chats(id) ON DELETE CASCADE
             )
         ''')
+    await pool.close()
     print("✅ Таблицы созданы / проверены.")
 
-# ---- Функции с повторными попытками ----
 async def execute_with_retry(func, *args, max_attempts=20, base_delay=0.1):
-    """Универсальная функция повторных попыток при ошибках соединения."""
     for attempt in range(max_attempts):
         try:
             return await func(*args)
@@ -250,13 +246,11 @@ async def execute_with_retry(func, *args, max_attempts=20, base_delay=0.1):
             else:
                 raise
         except Exception as e:
-            # Другие ошибки не повторяем
             raise
 
-# ---- Основные функции с asyncpg ----
+# ---------- Основные функции ----------
 
 async def get_user(user_id: int, username: str = None, initial_balance: int = 0) -> Tuple:
-    """Возвращает кортеж с данными пользователя. Если пользователь не существует – создаёт."""
     async def _get_user():
         pool = await init_db_pool()
         async with pool.acquire() as conn:
@@ -328,7 +322,6 @@ async def update_balance(user_id: int, new_balance: int):
     await execute_with_retry(_update)
 
 async def update_stats(user_id: int, win: bool) -> bool:
-    """Обновляет статистику. Возвращает True, если уровень повысился."""
     async def _update():
         pool = await init_db_pool()
         async with pool.acquire() as conn:
@@ -400,9 +393,7 @@ async def get_users_count(active_days=30) -> int:
                 row = await conn.fetchrow("SELECT COUNT(*) FROM users")
             else:
                 threshold = int(time.time()) - active_days * 86400
-                row = await conn.fetchrow(
-                    "SELECT COUNT(*) FROM users WHERE last_active > $1", threshold
-                )
+                row = await conn.fetchrow("SELECT COUNT(*) FROM users WHERE last_active > $1", threshold)
             return row[0] if row else 0
     return await execute_with_retry(_get)
 
@@ -675,30 +666,127 @@ async def get_bot_stats() -> dict:
             first_date_row = await conn.fetchrow("SELECT MIN(created_at) FROM users")
             first_date = first_date_row[0] if first_date_row and first_date_row[0] else int(time.time())
             days = (int(time.time()) - first_date) // 86400
-            total_users_row = await conn.fetchrow("SELECT COUNT(*) FROM users")
-            total_users = total_users_row[0]
+            total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
             now = int(time.time())
             today_start = now - (now % 86400)
-            new_today_row = await conn.fetchrow("SELECT COUNT(*) FROM users WHERE created_at >= $1", today_start)
-            new_today = new_today_row[0]
-            total_games_row = await conn.fetchrow("SELECT SUM(total_games) FROM users")
-            total_games = total_games_row[0] or 0
-            total_paid_row = await conn.fetchrow("SELECT SUM(amount_points) FROM withdraw_requests WHERE status='completed'")
-            total_paid = total_paid_row[0] or 0
+            new_today = await conn.fetchval("SELECT COUNT(*) FROM users WHERE created_at >= $1", today_start)
+            total_games = await conn.fetchval("SELECT SUM(total_games) FROM users") or 0
+            total_paid = await conn.fetchval("SELECT SUM(amount_points) FROM withdraw_requests WHERE status='completed'") or 0
             return {"days": days, "total_users": total_users, "new_today": new_today,
                     "total_games": total_games, "total_paid": total_paid}
     return await execute_with_retry(_get)
 
-# Функция для инициализации БД (вызывается при старте)
-async def create_db():
-    await init_db_pool()
-    await create_tables()   # переименовали, чтобы избежать конфликта имён
+# ---------- Дополнительные функции для работы с заявками ----------
+async def create_withdraw_request(user_id: int, amount_points: int, amount_usdt: float, wallet_address: str):
+    async def _create():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO withdraw_requests (user_id, amount_points, amount_usdt, wallet_address, status) "
+                "VALUES ($1, $2, $3, $4, 'pending')",
+                user_id, amount_points, amount_usdt, wallet_address
+            )
+    await execute_with_retry(_create)
 
-async def create_tables():
-    """Создаёт все таблицы (вызывается из create_db)."""
-    pool = await init_db_pool()
-    async with pool.acquire() as conn:
-        # (код создания таблиц из начала файла)
-        # Для краткости здесь ссылаемся на ранее выполненный код.
-        # Можно просто вызвать внутреннюю функцию, но для читаемости вставлю заново.
-        pass  # на самом деле таблицы уже созданы выше в этой же функции create_db
+async def get_pending_withdraw_requests() -> List[tuple]:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT id, user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE status = 'pending' ORDER BY created_at ASC"
+            )
+    return await execute_with_retry(_get)
+
+async def get_all_withdraw_requests(offset: int = 0, limit: int = 5) -> List[tuple]:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            return await conn.fetch(
+                "SELECT id, user_id, amount_points, amount_usdt, wallet_address, status, created_at, completed_at "
+                "FROM withdraw_requests ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+                limit, offset
+            )
+    return await execute_with_retry(_get)
+
+async def count_withdraw_requests(status: str = None) -> int:
+    async def _count():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            if status:
+                return await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE status = $1", status)
+            else:
+                return await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests")
+    return await execute_with_retry(_count)
+
+async def update_withdraw_request_status(request_id: int, status: str, completed_at: int = None):
+    async def _update():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            if status == 'completed':
+                await conn.execute(
+                    "UPDATE withdraw_requests SET status = $1, completed_at = $2 WHERE id = $3",
+                    status, completed_at or int(time.time()), request_id
+                )
+            else:
+                await conn.execute(
+                    "UPDATE withdraw_requests SET status = $1 WHERE id = $2",
+                    status, request_id
+                )
+    await execute_with_retry(_update)
+
+# ---------- Функции для крипто-транзакций ----------
+async def create_crypto_transaction(user_id: int, amount_rub: int, amount_points: int, payment_id: str, invoice_id: str):
+    async def _create():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO crypto_transactions (user_id, amount_rub, amount_points, payment_id, invoice_id) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                user_id, amount_rub, amount_points, payment_id, invoice_id
+            )
+    await execute_with_retry(_create)
+
+async def get_crypto_transaction(payment_id: str) -> Optional[Tuple[int, str]]:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT amount_points, status FROM crypto_transactions WHERE payment_id = $1",
+                payment_id
+            )
+            return (row['amount_points'], row['status']) if row else None
+    return await execute_with_retry(_get)
+
+async def get_crypto_transaction_full(payment_id: str) -> Optional[Tuple[int, str, str]]:
+    """Возвращает (amount_points, status, invoice_id)"""
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = $1",
+                payment_id
+            )
+            return (row['amount_points'], row['status'], row['invoice_id']) if row else None
+    return await execute_with_retry(_get)
+
+async def update_crypto_transaction_status(payment_id: str, status: str, confirmed_at: int = None):
+    async def _update():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE crypto_transactions SET status = $1, confirmed_at = $2 WHERE payment_id = $3",
+                status, confirmed_at or int(time.time()), payment_id
+            )
+    await execute_with_retry(_update)
+
+async def get_crypto_transaction_full(payment_id: str) -> Optional[Tuple[int, str, str]]:
+    """Возвращает (amount_points, status, invoice_id)"""
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = $1",
+                payment_id
+            )
+            return (row['amount_points'], row['status'], row['invoice_id']) if row else None
+    return await execute_with_retry(_get)

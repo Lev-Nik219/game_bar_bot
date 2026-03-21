@@ -1,12 +1,14 @@
 import asyncio
 import logging
 from uuid import uuid4
-import aiosqlite
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from database import DB_NAME, get_user, update_balance, add_deposit
+from database import (
+    get_user, update_balance, add_deposit, create_crypto_transaction,
+    get_crypto_transaction_full, update_crypto_transaction_status
+)
 from keyboards import profile_keyboard, deposit_keyboard
 from config import CRYPTOBOT_TOKEN
 from services.crypto_pay import crypto_pay_service
@@ -63,12 +65,7 @@ async def process_deposit(callback: types.CallbackQuery):
         if not pay_url:
             raise Exception("Не удалось получить ссылку на оплату")
 
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute(
-                "INSERT INTO crypto_transactions (user_id, amount_rub, amount_points, payment_id, invoice_id) VALUES (?, ?, ?, ?, ?)",
-                (user_id, amount_rub, amount_points, payment_id, invoice_id)
-            )
-            await db.commit()
+        await create_crypto_transaction(user_id, amount_rub, amount_points, payment_id, invoice_id)
 
         await callback.message.edit_text(
             f"💳 Для пополнения на {amount_points} баллов ({amount_rub} руб) "
@@ -135,12 +132,7 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         if not pay_url:
             raise Exception("Не удалось получить ссылку на оплату")
 
-        async with aiosqlite.connect(DB_NAME) as db:
-            await db.execute(
-                "INSERT INTO crypto_transactions (user_id, amount_rub, amount_points, payment_id, invoice_id) VALUES (?, ?, ?, ?, ?)",
-                (user_id, amount_rub, amount_points, payment_id, invoice_id)
-            )
-            await db.commit()
+        await create_crypto_transaction(user_id, amount_rub, amount_points, payment_id, invoice_id)
 
         await state.clear()
         await message.answer(
@@ -168,16 +160,11 @@ async def check_payment(callback: types.CallbackQuery):
     payment_id = callback.data.replace("check_payment_", "")
     user_id = callback.from_user.id
 
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = ? AND user_id = ?",
-            (payment_id, user_id)
-        ) as cursor:
-            row = await cursor.fetchone()
-    if not row:
+    txn = await get_crypto_transaction_full(payment_id)
+    if not txn:
         await callback.answer("❌ Транзакция не найдена", show_alert=True)
         return
-    amount_points, status, invoice_id = row
+    amount_points, status, invoice_id = txn
     if status == 'paid':
         await callback.answer("✅ Платёж уже был зачислен ранее", show_alert=True)
         return
@@ -203,15 +190,9 @@ async def check_payment(callback: types.CallbackQuery):
             balance, *_ = await get_user(user_id, callback.from_user.username)
             new_balance = balance + amount_points
             await update_balance(user_id, new_balance)
-            async with aiosqlite.connect(DB_NAME) as db:
-                await db.execute(
-                    "UPDATE crypto_transactions SET status = 'paid', confirmed_at = strftime('%s','now') WHERE payment_id = ?",
-                    (payment_id,)
-                )
-                await db.commit()
+            await update_crypto_transaction_status(payment_id, 'paid')
             await add_deposit(user_id, amount_points)
 
-            # Начисление реферального бонуса 15%
             await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
 
             await callback.message.edit_text(

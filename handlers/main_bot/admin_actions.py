@@ -1,12 +1,11 @@
-import aiosqlite
 import logging
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from database import (
-    DB_NAME, get_user, update_balance, get_user_stats,
-    get_all_users, get_users_count
+    get_user, update_balance, get_user_stats,
+    get_all_users, get_users_count, init_db_pool
 )
 from keyboards import admin_panel_keyboard, cancel_keyboard
 from states import AdminGiveStates, AdminTakeStates, AdminUserInfoStates, AdminListStates
@@ -18,7 +17,6 @@ router = Router()
 # ===== Главная админ-панель =====
 @router.callback_query(F.data == "admin_panel")
 async def admin_panel_callback(callback: types.CallbackQuery):
-    print(">>> admin_panel_callback вызван")
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
@@ -31,7 +29,6 @@ async def admin_panel_callback(callback: types.CallbackQuery):
 # ===== Начисление баллов =====
 @router.callback_query(F.data == "admin_give")
 async def admin_give_callback(callback: types.CallbackQuery, state: FSMContext):
-    print(">>> admin_give_callback вызван")
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
@@ -44,7 +41,6 @@ async def admin_give_callback(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(AdminGiveStates.waiting_for_target_id, F.text)
 async def admin_give_target_id(message: types.Message, state: FSMContext):
-    print(">>> admin_give_target_id вызван")
     try:
         target_id = int(message.text)
     except ValueError:
@@ -56,7 +52,6 @@ async def admin_give_target_id(message: types.Message, state: FSMContext):
 
 @router.message(AdminGiveStates.waiting_for_amount, F.text)
 async def admin_give_amount(message: types.Message, state: FSMContext):
-    print(">>> admin_give_amount вызван")
     try:
         amount = int(message.text)
         if amount <= 0:
@@ -93,7 +88,6 @@ async def admin_give_amount(message: types.Message, state: FSMContext):
 # ===== Списание баллов =====
 @router.callback_query(F.data == "admin_take")
 async def admin_take_callback(callback: types.CallbackQuery, state: FSMContext):
-    print(">>> admin_take_callback вызван")
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
@@ -106,7 +100,6 @@ async def admin_take_callback(callback: types.CallbackQuery, state: FSMContext):
 
 @router.message(AdminTakeStates.waiting_for_target_id, F.text)
 async def admin_take_target_id(message: types.Message, state: FSMContext):
-    print(">>> admin_take_target_id вызван")
     try:
         target_id = int(message.text)
     except ValueError:
@@ -118,7 +111,6 @@ async def admin_take_target_id(message: types.Message, state: FSMContext):
 
 @router.message(AdminTakeStates.waiting_for_amount, F.text)
 async def admin_take_amount(message: types.Message, state: FSMContext):
-    print(">>> admin_take_amount вызван")
     try:
         amount = int(message.text)
         if amount <= 0:
@@ -158,7 +150,6 @@ async def admin_take_amount(message: types.Message, state: FSMContext):
 # ===== Информация о пользователе =====
 @router.callback_query(F.data == "admin_userinfo")
 async def admin_userinfo_callback(callback: types.CallbackQuery, state: FSMContext):
-    print(">>> admin_userinfo_callback вызван")
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
@@ -171,7 +162,6 @@ async def admin_userinfo_callback(callback: types.CallbackQuery, state: FSMConte
 
 @router.message(AdminUserInfoStates.waiting_for_target_id, F.text)
 async def admin_userinfo_result(message: types.Message, state: FSMContext):
-    print(">>> admin_userinfo_result вызван")
     try:
         target_id = int(message.text)
     except ValueError:
@@ -208,7 +198,6 @@ async def admin_userinfo_result(message: types.Message, state: FSMContext):
 # ===== Список игроков (с пагинацией) =====
 @router.callback_query(F.data == "admin_list")
 async def admin_list_callback(callback: types.CallbackQuery, state: FSMContext):
-    print(">>> admin_list_callback вызван")
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
@@ -218,7 +207,6 @@ async def admin_list_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 async def show_users_page(message: types.Message, state: FSMContext, edit=False):
-    print(">>> show_users_page вызвана")
     data = await state.get_data()
     page = data.get("page", 0)
     limit = 5
@@ -256,7 +244,6 @@ async def show_users_page(message: types.Message, state: FSMContext, edit=False)
 
 @router.callback_query(AdminListStates.browsing, F.data == "users_next")
 async def users_next(callback: types.CallbackQuery, state: FSMContext):
-    print(">>> users_next вызван")
     data = await state.get_data()
     page = data.get("page", 0) + 1
     await state.update_data(page=page)
@@ -265,52 +252,30 @@ async def users_next(callback: types.CallbackQuery, state: FSMContext):
 
 @router.callback_query(AdminListStates.browsing, F.data == "users_prev")
 async def users_prev(callback: types.CallbackQuery, state: FSMContext):
-    print(">>> users_prev вызван")
     data = await state.get_data()
     page = data.get("page", 0) - 1
     await state.update_data(page=page)
     await show_users_page(callback.message, state, edit=True)
     await callback.answer()
 
-# ===== Заявки на вывод =====
+# ===== Заявки на вывод (заглушка) =====
 @router.callback_query(F.data == "admin_withdraw_requests")
-async def admin_withdraw_requests(callback: types.CallbackQuery):
-    print(">>> admin_withdraw_requests вызван")
-    user_id = callback.from_user.id
-    if user_id not in ADMIN_IDS:
+async def admin_withdraw_requests_callback(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
 
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute(
-            "SELECT id, user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE status = 'pending'"
-        ) as cursor:
-            requests = await cursor.fetchall()
-
-    if not requests:
-        await callback.message.edit_text(
-            "📭 Нет ожидающих заявок на вывод.",
-            reply_markup=admin_panel_keyboard()
-        )
-        return
-
-    text = "💸 **Ожидающие заявки:**\n\n"
-    for req in requests:
-        text += f"ID: {req[0]}\n"
-        text += f"Пользователь: {req[1]}\n"
-        text += f"Сумма: {req[2]} баллов ≈ {req[3]} USDT\n"
-        text += f"Контакт: {req[4]}\n"
-        text += f"Подтвердить: /confirm_withdraw {req[0]}\n"
-        text += f"Отклонить: /reject_withdraw {req[0]}\n\n"
-
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=admin_panel_keyboard())
+    # В основном боте заявки на вывод обрабатываются через админ-бота, поэтому здесь просто сообщение
+    await callback.message.edit_text(
+        "💸 Для обработки заявок на вывод используйте админ-бота (@Game_Bar_Admin_bot).",
+        reply_markup=admin_panel_keyboard()
+    )
+    await callback.answer()
 
 # ===== Управление турнирами (заглушка) =====
 @router.callback_query(F.data == "admin_tournaments")
 async def admin_tournaments_callback(callback: types.CallbackQuery):
-    print(">>> admin_tournaments_callback вызван")
-    user_id = callback.from_user.id
-    if user_id not in ADMIN_IDS:
+    if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
     await callback.message.edit_text(
@@ -318,5 +283,3 @@ async def admin_tournaments_callback(callback: types.CallbackQuery):
         reply_markup=admin_panel_keyboard()
     )
     await callback.answer()
-
-
