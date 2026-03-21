@@ -329,7 +329,6 @@ async def admin_stats_callback(callback: types.CallbackQuery):
     )
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=admin_back_keyboard())
     await callback.answer()
-    await pool.close()
 
 # ===== Заявки на вывод (новые) =====
 @router.callback_query(F.data == "admin_withdraw_requests")
@@ -477,7 +476,6 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
             await asyncio.sleep(0.05)
         except Exception:
             failed += 1
-    await pool.close()
 
     if bot_choice != "admin":
         await broadcast_bot.session.close()
@@ -541,7 +539,6 @@ async def create_tournament_duration(message: types.Message, state: FSMContext):
             "INSERT INTO tournaments (name, prize_points, start_time, end_time, status) VALUES ($1, $2, $3, $4, 'active')",
             name, prize, now, end_time
         )
-    await pool.close()
     await message.answer(f"✅ Турнир «{name}» создан и продлится {hours} часов.")
     await state.clear()
     await message.answer(
@@ -572,14 +569,12 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
         )
         if not row:
             await callback.answer("❌ Заявка не найдена или уже обработана", show_alert=True)
-            await pool.close()
             return
         request_id = row[0]
         await conn.execute(
             "UPDATE withdraw_requests SET status='completed', completed_at=$1 WHERE id=$2",
             int(time.time()), request_id
         )
-    await pool.close()
 
     try:
         main_bot = Bot(token=BOT_TOKEN)
@@ -619,14 +614,12 @@ async def admin_reject_withdraw(callback: types.CallbackQuery):
         )
         if not row:
             await callback.answer("❌ Нет ожидающих заявок у этого пользователя", show_alert=True)
-            await pool.close()
             return
         request_id, amount_points = row
         await conn.execute(
             "UPDATE withdraw_requests SET status='rejected' WHERE id=$1",
             request_id
         )
-    await pool.close()
 
     balance, *_ = await get_user(user_id, None)
     new_balance = balance + amount_points

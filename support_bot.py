@@ -1,11 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import logging
-import threading
 import re
-import os
-import time
-from flask import Flask, jsonify
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -15,26 +11,6 @@ from config import SUPPORT_BOT_TOKEN, ADMIN_IDS
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- Flask ----------
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def home():
-    return jsonify({"status": "Support bot is running", "time": time.time()})
-
-@flask_app.route('/health')
-def health():
-    return jsonify({"status": "ok"}), 200
-
-@flask_app.route('/favicon.ico')
-def favicon():
-    return '', 204
-
-def run_flask():
-    port = int(os.getenv('PORT', 8082))
-    flask_app.run(host='0.0.0.0', port=port)
-
-# ---------- Telegram Bot ----------
 bot = Bot(token=SUPPORT_BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
@@ -106,9 +82,6 @@ async def global_error_handler(update: types.Update, exception: Exception):
     return True
 
 async def main():
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    await asyncio.sleep(2)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

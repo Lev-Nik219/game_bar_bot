@@ -9,18 +9,40 @@ DB_URL = os.getenv('DATABASE_URL', 'postgresql://localhost/casino')
 _pool = None
 
 async def init_db_pool():
+    """Инициализирует пул соединений (глобально)."""
     global _pool
     if _pool is None:
         _pool = await asyncpg.create_pool(DB_URL, min_size=1, max_size=10)
     return _pool
 
 async def close_db_pool():
+    """Закрывает пул (вызывать при завершении бота)."""
     global _pool
     if _pool:
         await _pool.close()
         _pool = None
 
+async def execute_with_retry(func, *args, max_attempts=20, base_delay=0.1):
+    """Повторяет попытки при временных ошибках БД."""
+    for attempt in range(max_attempts):
+        try:
+            return await func(*args)
+        except (asyncpg.exceptions.ConnectionDoesNotExistError,
+                asyncpg.exceptions.TooManyConnectionsError,
+                asyncpg.exceptions.InterfaceError,
+                ConnectionError) as e:
+            if attempt < max_attempts - 1:
+                delay = base_delay * (2 ** attempt)
+                print(f"⚠️ Ошибка БД ({e}), повтор через {delay:.2f} сек...")
+                await asyncio.sleep(delay)
+            else:
+                raise
+        except Exception as e:
+            raise
+
+# ---- Создание таблиц ----
 async def create_db():
+    """Создаёт таблицы (вызывается при старте)."""
     pool = await init_db_pool()
     async with pool.acquire() as conn:
         # Таблица users
@@ -151,7 +173,7 @@ async def create_db():
                 active INTEGER DEFAULT 1
             )
         ''')
-        # Уведомления (для будущего)
+        # Уведомления
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS notifications (
                 id SERIAL PRIMARY KEY,
@@ -228,28 +250,9 @@ async def create_db():
                 FOREIGN KEY (chat_id) REFERENCES admin_chats(id) ON DELETE CASCADE
             )
         ''')
-    await pool.close()
     print("✅ Таблицы созданы / проверены.")
 
-async def execute_with_retry(func, *args, max_attempts=20, base_delay=0.1):
-    for attempt in range(max_attempts):
-        try:
-            return await func(*args)
-        except (asyncpg.exceptions.ConnectionDoesNotExistError,
-                asyncpg.exceptions.TooManyConnectionsError,
-                asyncpg.exceptions.InterfaceError,
-                ConnectionError) as e:
-            if attempt < max_attempts - 1:
-                delay = base_delay * (2 ** attempt)
-                print(f"⚠️ Ошибка БД ({e}), повтор через {delay:.2f} сек...")
-                await asyncio.sleep(delay)
-            else:
-                raise
-        except Exception as e:
-            raise
-
-# ---------- Основные функции ----------
-
+# ---- Основные функции работы с пользователями ----
 async def get_user(user_id: int, username: str = None, initial_balance: int = 0) -> Tuple:
     async def _get_user():
         pool = await init_db_pool()
@@ -459,18 +462,9 @@ async def check_referral_bonus(user_id: int, bot):
             )
             if row and row['invited_by'] is not None and row['friend_played'] == 0:
                 invited_by = row['invited_by']
-                await conn.execute(
-                    "UPDATE users SET friend_played = 1 WHERE user_id = $1",
-                    user_id
-                )
-                await conn.execute(
-                    "UPDATE users SET balance = balance + 30 WHERE user_id = $1",
-                    user_id
-                )
-                await conn.execute(
-                    "UPDATE users SET balance = balance + 30 WHERE user_id = $1",
-                    invited_by
-                )
+                await conn.execute("UPDATE users SET friend_played = 1 WHERE user_id = $1", user_id)
+                await conn.execute("UPDATE users SET balance = balance + 30 WHERE user_id = $1", user_id)
+                await conn.execute("UPDATE users SET balance = balance + 30 WHERE user_id = $1", invited_by)
                 try:
                     await bot.send_message(user_id, "🎉 Поздравляем! Вы сыграли первую игру и получили 30 бонусных баллов!")
                     await bot.send_message(invited_by, "🎉 Ваш друг сыграл первую игру! Вы получаете 30 бонусных баллов!")
@@ -478,6 +472,7 @@ async def check_referral_bonus(user_id: int, bot):
                     pass
     await execute_with_retry(_check)
 
+# ---- Турниры ----
 async def get_active_tournament() -> Optional[Tuple[int, str, int, int]]:
     async def _get():
         pool = await init_db_pool()
@@ -621,6 +616,7 @@ async def finish_tournament(tournament_id: int, bot):
             print(f"Ошибка при отправке уведомления: {e}")
     await execute_with_retry(_finish)
 
+# ---- Депозиты, события, соглашения ----
 async def add_deposit(user_id: int, amount: int):
     async def _add():
         pool = await init_db_pool()
@@ -676,7 +672,51 @@ async def get_bot_stats() -> dict:
                     "total_games": total_games, "total_paid": total_paid}
     return await execute_with_retry(_get)
 
-# ---------- Дополнительные функции для работы с заявками ----------
+# ---- Крипто-транзакции ----
+async def create_crypto_transaction(user_id: int, amount_rub: int, amount_points: int, payment_id: str, invoice_id: str):
+    async def _create():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO crypto_transactions (user_id, amount_rub, amount_points, payment_id, invoice_id) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                user_id, amount_rub, amount_points, payment_id, invoice_id
+            )
+    await execute_with_retry(_create)
+
+async def get_crypto_transaction(payment_id: str) -> Optional[Tuple[int, str]]:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT amount_points, status FROM crypto_transactions WHERE payment_id = $1",
+                payment_id
+            )
+            return (row['amount_points'], row['status']) if row else None
+    return await execute_with_retry(_get)
+
+async def get_crypto_transaction_full(payment_id: str) -> Optional[Tuple[int, str, str]]:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = $1",
+                payment_id
+            )
+            return (row['amount_points'], row['status'], row['invoice_id']) if row else None
+    return await execute_with_retry(_get)
+
+async def update_crypto_transaction_status(payment_id: str, status: str, confirmed_at: int = None):
+    async def _update():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE crypto_transactions SET status = $1, confirmed_at = $2 WHERE payment_id = $3",
+                status, confirmed_at or int(time.time()), payment_id
+            )
+    await execute_with_retry(_update)
+
+# ---- Заявки на вывод ----
 async def create_withdraw_request(user_id: int, amount_points: int, amount_usdt: float, wallet_address: str):
     async def _create():
         pool = await init_db_pool()
@@ -733,60 +773,3 @@ async def update_withdraw_request_status(request_id: int, status: str, completed
                     status, request_id
                 )
     await execute_with_retry(_update)
-
-# ---------- Функции для крипто-транзакций ----------
-async def create_crypto_transaction(user_id: int, amount_rub: int, amount_points: int, payment_id: str, invoice_id: str):
-    async def _create():
-        pool = await init_db_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "INSERT INTO crypto_transactions (user_id, amount_rub, amount_points, payment_id, invoice_id) "
-                "VALUES ($1, $2, $3, $4, $5)",
-                user_id, amount_rub, amount_points, payment_id, invoice_id
-            )
-    await execute_with_retry(_create)
-
-async def get_crypto_transaction(payment_id: str) -> Optional[Tuple[int, str]]:
-    async def _get():
-        pool = await init_db_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT amount_points, status FROM crypto_transactions WHERE payment_id = $1",
-                payment_id
-            )
-            return (row['amount_points'], row['status']) if row else None
-    return await execute_with_retry(_get)
-
-async def get_crypto_transaction_full(payment_id: str) -> Optional[Tuple[int, str, str]]:
-    """Возвращает (amount_points, status, invoice_id)"""
-    async def _get():
-        pool = await init_db_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = $1",
-                payment_id
-            )
-            return (row['amount_points'], row['status'], row['invoice_id']) if row else None
-    return await execute_with_retry(_get)
-
-async def update_crypto_transaction_status(payment_id: str, status: str, confirmed_at: int = None):
-    async def _update():
-        pool = await init_db_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE crypto_transactions SET status = $1, confirmed_at = $2 WHERE payment_id = $3",
-                status, confirmed_at or int(time.time()), payment_id
-            )
-    await execute_with_retry(_update)
-
-async def get_crypto_transaction_full(payment_id: str) -> Optional[Tuple[int, str, str]]:
-    """Возвращает (amount_points, status, invoice_id)"""
-    async def _get():
-        pool = await init_db_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = $1",
-                payment_id
-            )
-            return (row['amount_points'], row['status'], row['invoice_id']) if row else None
-    return await execute_with_retry(_get)
