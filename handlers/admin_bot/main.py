@@ -7,6 +7,9 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
+from database import init_db_pool
+from config import BOT_TOKEN
+
 
 from database import (
     get_user, update_balance, get_user_stats,
@@ -641,3 +644,115 @@ async def admin_reject_withdraw(callback: types.CallbackQuery):
         f"Баллы возвращены пользователю."
     )
     await callback.answer("Заявка отклонена", show_alert=True)
+
+@router.message(Command("confirmwithdraw"))
+async def confirm_withdraw_command(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("❌ Использование: /confirmwithdraw <ID_заявки>")
+        return
+
+    try:
+        request_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID заявки должен быть числом.")
+        return
+
+    # Получаем данные заявки из БД
+    pool = await init_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT user_id, amount_points FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
+            request_id
+        )
+        if not row:
+            await message.answer(f"❌ Заявка с ID {request_id} не найдена или уже обработана.")
+            await pool.close()
+            return
+
+        target_user_id = row['user_id']
+        amount_points = row['amount_points']
+
+        # Обновляем статус
+        await conn.execute(
+            "UPDATE withdraw_requests SET status = 'completed', completed_at = $1 WHERE id = $2",
+            int(time.time()), request_id
+        )
+    await pool.close()
+
+    # Уведомляем пользователя через основного бота
+    try:
+        main_bot = Bot(token=BOT_TOKEN)
+        await main_bot.send_message(
+            target_user_id,
+            f"✅ Ваш запрос на вывод {amount_points} баллов подтверждён администратором!\n"
+            f"Средства будут отправлены на указанный вами контакт."
+        )
+        await main_bot.session.close()
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {target_user_id}: {e}")
+
+    await message.answer(f"✅ Заявка #{request_id} подтверждена. Пользователь уведомлён.")
+
+@router.message(Command("rejectwithdraw"))
+async def reject_withdraw_command(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("❌ Использование: /rejectwithdraw <ID_заявки>")
+        return
+
+    try:
+        request_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ ID заявки должен быть числом.")
+        return
+
+    pool = await init_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT user_id, amount_points FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
+            request_id
+        )
+        if not row:
+            await message.answer(f"❌ Заявка с ID {request_id} не найдена или уже обработана.")
+            await pool.close()
+            return
+
+        target_user_id = row['user_id']
+        amount_points = row['amount_points']
+
+        # Обновляем статус на rejected
+        await conn.execute(
+            "UPDATE withdraw_requests SET status = 'rejected' WHERE id = $1",
+            request_id
+        )
+        # Возвращаем баллы пользователю
+        await conn.execute(
+            "UPDATE users SET balance = balance + $1 WHERE user_id = $2",
+            amount_points, target_user_id
+        )
+    await pool.close()
+
+    # Уведомляем пользователя
+    try:
+        main_bot = Bot(token=BOT_TOKEN)
+        await main_bot.send_message(
+            target_user_id,
+            f"❌ Ваш запрос на вывод {amount_points} баллов был отклонён администратором.\n"
+            f"Средства возвращены на ваш баланс."
+        )
+        await main_bot.session.close()
+    except Exception as e:
+        logger.error(f"Не удалось уведомить пользователя {target_user_id}: {e}")
+
+    await message.answer(f"❌ Заявка #{request_id} отклонена. Баллы возвращены пользователю.")
