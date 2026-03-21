@@ -1,14 +1,14 @@
 import asyncio
 import time
 import logging
-import asyncpg
+import aiohttp
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
 from database import init_db_pool
-from config import BOT_TOKEN
+from config import MAIN_BOT_TOKEN, ADMIN_IDS
 
 from database import (
     get_user, update_balance, get_user_stats,
@@ -25,15 +25,31 @@ from states import (
     AdminGiveStates, AdminTakeStates, AdminUserInfoStates,
     AdminBroadcastStates, CreateTournamentStates, AdminListStates
 )
-from config import ADMIN_IDS, BOT_TOKEN
 
 logger = logging.getLogger(__name__)
 router = Router()
 
-# --- Вспомогательная функция для получения бота по выбору ---
+# ---- Вспомогательные функции для отправки сообщений через основного бота ----
+async def send_message_via_main_bot(chat_id: int, text: str, parse_mode: str = "HTML"):
+    """Отправляет сообщение через основного бота, используя HTTP API."""
+    url = f"https://api.telegram.org/bot{MAIN_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=payload) as resp:
+            return await resp.json()
+
+async def send_message_via_main_bot_silent(chat_id: int, text: str, parse_mode: str = "HTML"):
+    """Отправляет сообщение, игнорируя ошибки (чтобы не ломать основной поток)."""
+    try:
+        await send_message_via_main_bot(chat_id, text, parse_mode)
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения пользователю {chat_id}: {e}")
+
+# ---- Вспомогательная функция для получения бота по выбору (оставляем для совместимости, но теперь используем HTTP) ----
 async def get_bot_by_choice(choice: str, original_bot: Bot) -> Bot:
     if choice == "main":
-        return Bot(token=BOT_TOKEN)
+        # Возвращаем фиктивного бота, который не используется – но лучше не вызывать
+        return None
     else:
         return original_bot
 
@@ -113,16 +129,11 @@ async def admin_give_amount(message: types.Message, state: FSMContext):
         f"Новый баланс: {new_balance} 💎."
     )
 
-    # Уведомление пользователю через основного бота
-    try:
-        main_bot = Bot(token=BOT_TOKEN)
-        await main_bot.send_message(
-            target_id,
-            f"🎁 Вам начислено {amount} 💎 администратором!\nТекущий баланс: {new_balance} 💎."
-        )
-        await main_bot.session.close()
-    except Exception as e:
-        logger.error(f"Не удалось отправить уведомление пользователю {target_id}: {e}")
+    # Уведомление пользователю через основного бота (HTTP API)
+    await send_message_via_main_bot_silent(
+        target_id,
+        f"🎁 Вам начислено {amount} 💎 администратором!\nТекущий баланс: {new_balance} 💎."
+    )
 
     await state.clear()
     await message.answer(
@@ -179,15 +190,10 @@ async def admin_take_amount(message: types.Message, state: FSMContext):
         f"Новый баланс: {new_balance} 💎."
     )
 
-    try:
-        main_bot = Bot(token=BOT_TOKEN)
-        await main_bot.send_message(
-            target_id,
-            f"⚠️ У вас списано {amount} 💎 администратором.\nТекущий баланс: {new_balance} 💎."
-        )
-        await main_bot.session.close()
-    except Exception as e:
-        logger.error(f"Не удалось отправить уведомление пользователю {target_id}: {e}")
+    await send_message_via_main_bot_silent(
+        target_id,
+        f"⚠️ У вас списано {amount} 💎 администратором.\nТекущий баланс: {new_balance} 💎."
+    )
 
     await state.clear()
     await message.answer(
@@ -373,7 +379,7 @@ async def admin_withdraw_history_callback(callback: types.CallbackQuery, state: 
 async def show_withdraw_history(message: types.Message, state: FSMContext, edit=False):
     data = await state.get_data()
     page = data.get("withdraw_history_page", 0)
-    limit = 3  # <-- изменено с 5 на 3
+    limit = 3
     offset = page * limit
 
     requests = await get_all_withdraw_requests(offset, limit)
@@ -461,7 +467,7 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
     bot_choice = data.get("bot_choice", "admin")
 
     if bot_choice == "main":
-        broadcast_bot = Bot(token=BOT_TOKEN)
+        broadcast_bot = None  # не используем, будем слать через HTTP
     else:
         broadcast_bot = message.bot
 
@@ -471,16 +477,25 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
         users = await conn.fetch("SELECT user_id FROM users")
     success = 0
     failed = 0
-    for (user_id,) in users:
-        try:
-            await broadcast_bot.send_message(user_id, text)
-            success += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            failed += 1
 
-    if bot_choice != "admin":
-        await broadcast_bot.session.close()
+    if bot_choice == "main":
+        # Отправляем через HTTP
+        for (user_id,) in users:
+            try:
+                await send_message_via_main_bot(user_id, text)
+                success += 1
+                await asyncio.sleep(0.05)
+            except Exception:
+                failed += 1
+    else:
+        # Отправляем через админ-бота
+        for (user_id,) in users:
+            try:
+                await broadcast_bot.send_message(user_id, text)
+                success += 1
+                await asyncio.sleep(0.05)
+            except Exception:
+                failed += 1
 
     await message.answer(f"✅ Рассылка завершена.\nУспешно: {success}\nНеудачно: {failed}")
     await state.clear()
@@ -578,16 +593,11 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
             int(time.time()), request_id
         )
 
-    try:
-        main_bot = Bot(token=BOT_TOKEN)
-        await main_bot.send_message(
-            user_id,
-            f"✅ Ваш запрос на вывод {amount_points} баллов подтверждён администратором!\n"
-            f"Средства будут отправлены на указанный вами контакт."
-        )
-        await main_bot.session.close()
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
+    await send_message_via_main_bot_silent(
+        user_id,
+        f"✅ Ваш запрос на вывод {amount_points} баллов подтверждён администратором!\n"
+        f"Средства будут отправлены на указанный вами контакт."
+    )
 
     await callback.message.edit_text(
         f"✅ Заявка пользователя {user_id} на {amount_points} баллов подтверждена.\n"
@@ -627,16 +637,11 @@ async def admin_reject_withdraw(callback: types.CallbackQuery):
     new_balance = balance + amount_points
     await update_balance(user_id, new_balance)
 
-    try:
-        main_bot = Bot(token=BOT_TOKEN)
-        await main_bot.send_message(
-            user_id,
-            f"❌ Ваш запрос на вывод {amount_points} баллов был отклонён администратором.\n"
-            f"Средства возвращены на ваш баланс."
-        )
-        await main_bot.session.close()
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
+    await send_message_via_main_bot_silent(
+        user_id,
+        f"❌ Ваш запрос на вывод {amount_points} баллов был отклонён администратором.\n"
+        f"Средства возвращены на ваш баланс."
+    )
 
     await callback.message.edit_text(
         f"❌ Заявка пользователя {user_id} на {amount_points} баллов отклонена.\n"
@@ -677,25 +682,18 @@ async def confirm_withdraw_command(message: types.Message):
         amount_usdt = row['amount_usdt']
         contact = row['wallet_address']
 
-        # Пересчитываем рубли по курсу 90 (как в основном боте)
         amount_rub = round(amount_usdt * 90, 2)
 
         await conn.execute(
             "UPDATE withdraw_requests SET status = 'completed', completed_at = $1 WHERE id = $2",
             int(time.time()), request_id
         )
-    # НЕ закрываем пул
 
-    try:
-        main_bot = Bot(token=BOT_TOKEN)
-        await main_bot.send_message(
-            target_user_id,
-            f"✅ Ваш запрос на вывод {amount_points} баллов подтверждён администратором!\n"
-            f"Средства будут отправлены на указанный вами контакт."
-        )
-        await main_bot.session.close()
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {target_user_id}: {e}")
+    await send_message_via_main_bot_silent(
+        target_user_id,
+        f"✅ Ваш запрос на вывод {amount_points} баллов подтверждён администратором!\n"
+        f"Средства будут отправлены на указанный вами контакт."
+    )
 
     await message.answer(
         f"✅ Заявка #{request_id} подтверждена.\n"
@@ -748,18 +746,12 @@ async def reject_withdraw_command(message: types.Message):
             "UPDATE users SET balance = balance + $1 WHERE user_id = $2",
             amount_points, target_user_id
         )
-    # НЕ закрываем пул
 
-    try:
-        main_bot = Bot(token=BOT_TOKEN)
-        await main_bot.send_message(
-            target_user_id,
-            f"❌ Ваш запрос на вывод {amount_points} баллов был отклонён администратором.\n"
-            f"Средства возвращены на ваш баланс."
-        )
-        await main_bot.session.close()
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {target_user_id}: {e}")
+    await send_message_via_main_bot_silent(
+        target_user_id,
+        f"❌ Ваш запрос на вывод {amount_points} баллов был отклонён администратором.\n"
+        f"Средства возвращены на ваш баланс."
+    )
 
     await message.answer(
         f"❌ Заявка #{request_id} отклонена.\n"
