@@ -5,7 +5,6 @@ from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from keyboards import agreement_short_keyboard, agreement_keyboard
-from constants import WELCOME_WITH_INVITE_TEMPLATE
 
 from database import (
     get_user, update_balance, add_deposit, create_crypto_transaction,
@@ -17,8 +16,39 @@ from services.crypto_pay import crypto_pay_service
 from services.referral import award_referral_deposit_bonus
 from states import CustomDepositStates
 
+from database import get_user, update_balance, log_agreement
+from agreement_logger import log_agreement_to_csv
+from keyboards import agreement_keyboard, agreement_short_keyboard
+from constants import WELCOME_WITH_INVITE_TEMPLATE
+
+
 logger = logging.getLogger(__name__)
 router = Router()
+
+@router.callback_query(F.data == "accept_agreement")
+async def accept_agreement_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    username = callback.from_user.username
+    first_name = callback.from_user.first_name
+
+    # Начисляем бонус
+    current_balance, *_ = await get_user(user_id, username)
+    new_balance = current_balance + 50
+    await update_balance(user_id, new_balance)
+
+    # Логируем согласие
+    try:
+        await log_agreement(user_id)
+        log_agreement_to_csv(user_id, username)
+    except Exception as e:
+        logger.error(f"Ошибка логирования соглашения: {e}")
+
+    await callback.message.answer("🎁 Вы получили 50 бонусных баллов за принятие соглашения!")
+    await callback.message.delete()
+    await show_welcome_with_invite(
+        callback.message, user_id, first_name, username, callback.bot
+    )
 
 @router.callback_query(F.data == "deposit")
 async def deposit_callback(callback: types.CallbackQuery):
