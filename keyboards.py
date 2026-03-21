@@ -53,9 +53,11 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="➖ Забрать баллы", callback_data="admin_take")],
         [InlineKeyboardButton(text="👁 Информация о пользователе", callback_data="admin_userinfo")],
         [InlineKeyboardButton(text="👥 Список игроков", callback_data="admin_list")],
-        [InlineKeyboardButton(text="💸 Заявки на вывод", callback_data="admin_withdraw_requests")],
-        [InlineKeyboardButton(text="🏆 Управление турнирами", callback_data="admin_tournaments")],
-        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="💸 Новые заявки на вывод", callback_data="admin_withdraw_requests")],
+        [InlineKeyboardButton(text="📜 Общие заявки на вывод", callback_data="admin_withdraw_history")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="🏆 Создать турнир", callback_data="admin_create_tournament")],
     ])
 
 def profile_keyboard(user_id: int) -> InlineKeyboardMarkup:
@@ -136,6 +138,8 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="➖ Забрать баллы", callback_data="admin_take")],
         [InlineKeyboardButton(text="👁 Информация о пользователе", callback_data="admin_userinfo")],
         [InlineKeyboardButton(text="👥 Список игроков", callback_data="admin_list")],
+        [InlineKeyboardButton(text="💸 Новые заявки на вывод", callback_data="admin_withdraw_requests")],
+        [InlineKeyboardButton(text="📜 Общие заявки на вывод", callback_data="admin_withdraw_history")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="🏆 Создать турнир", callback_data="admin_create_tournament")],

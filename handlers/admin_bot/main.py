@@ -6,6 +6,7 @@ from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from datetime import datetime
 
 from database import (
     DB_NAME, get_user, update_balance, get_user_stats,
@@ -17,7 +18,7 @@ from keyboards import (
 )
 from states import (
     AdminGiveStates, AdminTakeStates, AdminUserInfoStates,
-    AdminBroadcastStates, CreateTournamentStates
+    AdminBroadcastStates, CreateTournamentStates, AdminListStates
 )
 from config import ADMIN_IDS, BOT_TOKEN
 
@@ -190,7 +191,7 @@ async def admin_take_amount(message: types.Message, state: FSMContext):
         reply_markup=admin_main_keyboard()
     )
 
-# ===== Информация о пользователе (исправлено – убрана кнопка открытия чата) =====
+# ===== Информация о пользователе =====
 @router.callback_query(F.data == "admin_userinfo")
 async def admin_userinfo_callback(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -444,33 +445,140 @@ async def create_tournament_duration(message: types.Message, state: FSMContext):
         reply_markup=admin_main_keyboard()
     )
 
-# ===== Обработка заявок на вывод =====
-@router.callback_query(F.data.startswith("admin_confirm_withdraw_"))
-async def admin_confirm_withdraw(callback: types.CallbackQuery):
-    # callback.data = "admin_confirm_withdraw_123456_100"
-    parts = callback.data.split('_')
-    if len(parts) == 5:
-        try:
-            user_id = int(parts[3])
-            amount_points = int(parts[4])
-        except ValueError:
-            await callback.answer("❌ Неверный формат данных", show_alert=True)
-            return
-    else:
-        await callback.answer("❌ Неверный формат данных", show_alert=True)
+# ===== Заявки на вывод =====
+@router.callback_query(F.data == "admin_withdraw_requests")
+async def admin_withdraw_requests(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute(
-            "SELECT id FROM withdraw_requests WHERE user_id = ? AND amount_points = ? AND status='pending' ORDER BY created_at DESC LIMIT 1",
-            (user_id, amount_points)
+            "SELECT id, user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE status = 'pending'"
+        ) as cursor:
+            requests = await cursor.fetchall()
+
+    if not requests:
+        await callback.message.edit_text(
+            "📭 Нет ожидающих заявок на вывод.",
+            reply_markup=admin_main_keyboard()
+        )
+        return
+
+    text = "💸 **Ожидающие заявки:**\n\n"
+    for req in requests:
+        text += f"ID: {req[0]}\n"
+        text += f"Пользователь: {req[1]}\n"
+        text += f"Сумма: {req[2]} баллов ≈ {req[3]} USDT\n"
+        text += f"Контакт: {req[4]}\n"
+        text += f"Подтвердить: /confirm_withdraw {req[0]}\n"
+        text += f"Отклонить: /reject_withdraw {req[0]}\n\n"
+
+    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=admin_main_keyboard())
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_withdraw_history")
+async def admin_withdraw_history_callback(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    await state.set_state(AdminListStates.browsing)
+    await state.update_data(withdraw_history_page=0, withdraw_history_mode=True)
+    await show_withdraw_history(callback.message, state, edit=True)
+    await callback.answer()
+
+async def show_withdraw_history(message: types.Message, state: FSMContext, edit=False):
+    data = await state.get_data()
+    page = data.get("withdraw_history_page", 0)
+    limit = 5
+    offset = page * limit
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT COUNT(*) FROM withdraw_requests") as cursor:
+            total = (await cursor.fetchone())[0]
+        async with db.execute(
+            "SELECT id, user_id, amount_points, amount_usdt, wallet_address, status, created_at, completed_at "
+            "FROM withdraw_requests ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            (limit, offset)
+        ) as cursor:
+            requests = await cursor.fetchall()
+
+    total_pages = (total + limit - 1) // limit if total > 0 else 1
+    if not requests:
+        text = "📜 Нет заявок на вывод."
+    else:
+        text = f"📜 Общие заявки на вывод — страница {page+1}/{total_pages}:\n\n"
+        for req in requests:
+            req_id, uid, amount_points, amount_usdt, wallet, status, created_at, completed_at = req
+            status_emoji = "🟡" if status == 'pending' else ("✅" if status == 'completed' else "❌")
+            text += f"{status_emoji} Заявка #{req_id}\n"
+            text += f"👤 Пользователь: <code>{uid}</code>\n"
+            text += f"💸 Сумма: {amount_points} баллов (~{amount_usdt} USDT)\n"
+            text += f"📞 Контакт: {wallet}\n"
+            text += f"📅 Создана: {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')}\n"
+            if status == 'completed' and completed_at:
+                text += f"✅ Подтверждена: {datetime.fromtimestamp(completed_at).strftime('%Y-%m-%d %H:%M')}\n"
+            elif status == 'rejected':
+                text += f"❌ Отклонена\n"
+            text += "\n"
+
+    buttons = []
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data="withdraw_history_prev"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data="withdraw_history_next"))
+    if nav_row:
+        buttons.append(nav_row)
+    buttons.append([InlineKeyboardButton(text="🔙 Назад в админ-панель", callback_data="admin_back")])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    if edit:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
+@router.callback_query(AdminListStates.browsing, F.data == "withdraw_history_next")
+async def withdraw_history_next(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    page = data.get("withdraw_history_page", 0) + 1
+    await state.update_data(withdraw_history_page=page)
+    await show_withdraw_history(callback.message, state, edit=True)
+    await callback.answer()
+
+@router.callback_query(AdminListStates.browsing, F.data == "withdraw_history_prev")
+async def withdraw_history_prev(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    page = data.get("withdraw_history_page", 0) - 1
+    await state.update_data(withdraw_history_page=page)
+    await show_withdraw_history(callback.message, state, edit=True)
+    await callback.answer()
+
+# ===== Обработка заявок на вывод через команды =====
+@router.message(Command("confirm_withdraw"))
+async def admin_confirm_withdraw_command(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    args = message.text.split()
+    if len(args) != 2:
+        await message.answer("Использование: /confirm_withdraw <id_заявки>")
+        return
+    try:
+        request_id = int(args[1])
+    except ValueError:
+        await message.answer("ID заявки должен быть числом.")
+        return
+
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute(
+            "SELECT user_id, amount_points FROM withdraw_requests WHERE id = ? AND status = 'pending'",
+            (request_id,)
         ) as cursor:
             row = await cursor.fetchone()
         if not row:
-            await callback.answer("❌ Заявка не найдена или уже обработана", show_alert=True)
+            await message.answer("❌ Заявка не найдена или уже обработана.")
             return
-        request_id = row[0]
-
+        user_id, amount_points = row
         await db.execute(
             "UPDATE withdraw_requests SET status='completed', completed_at=strftime('%s','now') WHERE id=?",
             (request_id,)
@@ -489,37 +597,32 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
 
-    await callback.message.edit_text(
-        f"✅ Заявка пользователя {user_id} на {amount_points} баллов подтверждена.\n"
-        f"Пользователь уведомлён."
-    )
-    await callback.answer("Вывод подтверждён", show_alert=True)
+    await message.answer(f"✅ Заявка #{request_id} подтверждена. Пользователь уведомлён.")
 
-@router.callback_query(F.data.startswith("admin_reject_withdraw_"))
-async def admin_reject_withdraw(callback: types.CallbackQuery):
-    # callback.data = "admin_reject_withdraw_123456"
-    parts = callback.data.split('_')
-    if len(parts) == 4:
-        try:
-            user_id = int(parts[3])
-        except ValueError:
-            await callback.answer("❌ Неверный формат данных", show_alert=True)
-            return
-    else:
-        await callback.answer("❌ Неверный формат данных", show_alert=True)
+@router.message(Command("reject_withdraw"))
+async def admin_reject_withdraw_command(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    args = message.text.split()
+    if len(args) != 2:
+        await message.answer("Использование: /reject_withdraw <id_заявки>")
+        return
+    try:
+        request_id = int(args[1])
+    except ValueError:
+        await message.answer("ID заявки должен быть числом.")
         return
 
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute(
-            "SELECT id, amount_points FROM withdraw_requests WHERE user_id = ? AND status='pending' ORDER BY created_at DESC LIMIT 1",
-            (user_id,)
+            "SELECT user_id, amount_points FROM withdraw_requests WHERE id = ? AND status = 'pending'",
+            (request_id,)
         ) as cursor:
             row = await cursor.fetchone()
         if not row:
-            await callback.answer("❌ Нет ожидающих заявок у этого пользователя", show_alert=True)
+            await message.answer("❌ Заявка не найдена или уже обработана.")
             return
-        request_id, amount_points = row
-
+        user_id, amount_points = row
         await db.execute(
             "UPDATE withdraw_requests SET status='rejected' WHERE id=?",
             (request_id,)
@@ -543,8 +646,4 @@ async def admin_reject_withdraw(callback: types.CallbackQuery):
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
 
-    await callback.message.edit_text(
-        f"❌ Заявка пользователя {user_id} на {amount_points} баллов отклонена.\n"
-        f"Баллы возвращены пользователю."
-    )
-    await callback.answer("Заявка отклонена", show_alert=True)
+    await message.answer(f"❌ Заявка #{request_id} отклонена. Баллы возвращены пользователю.")
