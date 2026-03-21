@@ -665,7 +665,7 @@ async def confirm_withdraw_command(message: types.Message):
     pool = await init_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT user_id, amount_points, wallet_address FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
+            "SELECT user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
             request_id
         )
         if not row:
@@ -674,7 +674,11 @@ async def confirm_withdraw_command(message: types.Message):
 
         target_user_id = row['user_id']
         amount_points = row['amount_points']
+        amount_usdt = row['amount_usdt']
         contact = row['wallet_address']
+
+        # Пересчитываем рубли по курсу 90 (как в основном боте)
+        amount_rub = round(amount_usdt * 90, 2)
 
         await conn.execute(
             "UPDATE withdraw_requests SET status = 'completed', completed_at = $1 WHERE id = $2",
@@ -696,7 +700,7 @@ async def confirm_withdraw_command(message: types.Message):
     await message.answer(
         f"✅ Заявка #{request_id} подтверждена.\n"
         f"👤 Пользователь: {target_user_id}\n"
-        f"💸 Сумма: {amount_points} баллов\n"
+        f"💸 Сумма: {amount_points} баллов ≈ {amount_rub} руб ≈ {amount_usdt} USDT\n"
         f"📞 Контакт: {contact}\n"
         f"Пользователь уведомлён."
     )
@@ -722,7 +726,7 @@ async def reject_withdraw_command(message: types.Message):
     pool = await init_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT user_id, amount_points, wallet_address FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
+            "SELECT user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
             request_id
         )
         if not row:
@@ -731,7 +735,10 @@ async def reject_withdraw_command(message: types.Message):
 
         target_user_id = row['user_id']
         amount_points = row['amount_points']
+        amount_usdt = row['amount_usdt']
         contact = row['wallet_address']
+
+        amount_rub = round(amount_usdt * 90, 2)
 
         await conn.execute(
             "UPDATE withdraw_requests SET status = 'rejected' WHERE id = $1",
@@ -757,7 +764,7 @@ async def reject_withdraw_command(message: types.Message):
     await message.answer(
         f"❌ Заявка #{request_id} отклонена.\n"
         f"👤 Пользователь: {target_user_id}\n"
-        f"💸 Сумма: {amount_points} баллов\n"
+        f"💸 Сумма: {amount_points} баллов ≈ {amount_rub} руб ≈ {amount_usdt} USDT\n"
         f"📞 Контакт: {contact}\n"
         f"Баллы возвращены пользователю."
     )
