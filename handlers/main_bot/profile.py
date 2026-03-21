@@ -4,6 +4,8 @@ from uuid import uuid4
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from keyboards import agreement_short_keyboard, agreement_keyboard
+from constants import WELCOME_WITH_INVITE_TEMPLATE
 
 from database import (
     get_user, update_balance, add_deposit, create_crypto_transaction,
@@ -206,3 +208,29 @@ async def check_payment(callback: types.CallbackQuery):
     except Exception as e:
         logger.error(f"Ошибка при проверке: {e}")
         await callback.answer(f"❌ Ошибка проверки: {str(e)}", show_alert=True)
+
+async def show_agreement(message: types.Message):
+    from constants import AGREEMENT_SHORT
+    await message.answer(
+    AGREEMENT_SHORT,
+    parse_mode="HTML",
+    reply_markup=agreement_short_keyboard()
+)
+
+async def show_full_agreement(message: types.Message):
+        from constants import AGREEMENT_FULL
+        await message.answer(
+            AGREEMENT_FULL,
+            reply_markup=agreement_keyboard()
+        )
+    
+async def show_welcome_with_invite(
+        message: types.Message, user_id: int, first_name: str, username: str, bot
+    ):
+        balance, *_ = await get_user(user_id, username)
+        text = WELCOME_WITH_INVITE_TEMPLATE.format(first_name=first_name, balance=balance)
+        inline_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="invite_friend")],
+            [InlineKeyboardButton(text="🎮 Начать игру", callback_data="back_to_menu")]
+        ])
+        await message.answer(text, reply_markup=inline_keyboard)
