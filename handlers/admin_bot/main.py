@@ -663,7 +663,6 @@ async def confirm_withdraw_command(message: types.Message):
         await message.answer("❌ ID заявки должен быть числом.")
         return
 
-    # Получаем данные заявки из БД
     pool = await init_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -672,20 +671,17 @@ async def confirm_withdraw_command(message: types.Message):
         )
         if not row:
             await message.answer(f"❌ Заявка с ID {request_id} не найдена или уже обработана.")
-            await pool.close()
             return
 
         target_user_id = row['user_id']
         amount_points = row['amount_points']
 
-        # Обновляем статус
         await conn.execute(
             "UPDATE withdraw_requests SET status = 'completed', completed_at = $1 WHERE id = $2",
             int(time.time()), request_id
         )
-    await pool.close()
+    # НЕ закрываем пул
 
-    # Уведомляем пользователя через основного бота
     try:
         main_bot = Bot(token=BOT_TOKEN)
         await main_bot.send_message(
@@ -725,25 +721,21 @@ async def reject_withdraw_command(message: types.Message):
         )
         if not row:
             await message.answer(f"❌ Заявка с ID {request_id} не найдена или уже обработана.")
-            await pool.close()
             return
 
         target_user_id = row['user_id']
         amount_points = row['amount_points']
 
-        # Обновляем статус на rejected
         await conn.execute(
             "UPDATE withdraw_requests SET status = 'rejected' WHERE id = $1",
             request_id
         )
-        # Возвращаем баллы пользователю
         await conn.execute(
             "UPDATE users SET balance = balance + $1 WHERE user_id = $2",
             amount_points, target_user_id
         )
-    await pool.close()
+    # НЕ закрываем пул
 
-    # Уведомляем пользователя
     try:
         main_bot = Bot(token=BOT_TOKEN)
         await main_bot.send_message(
