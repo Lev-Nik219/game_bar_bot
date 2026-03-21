@@ -10,7 +10,6 @@ from datetime import datetime
 from database import init_db_pool
 from config import BOT_TOKEN
 
-
 from database import (
     get_user, update_balance, get_user_stats,
     get_all_users, get_users_count, get_bonus_total,
@@ -374,7 +373,7 @@ async def admin_withdraw_history_callback(callback: types.CallbackQuery, state: 
 async def show_withdraw_history(message: types.Message, state: FSMContext, edit=False):
     data = await state.get_data()
     page = data.get("withdraw_history_page", 0)
-    limit = 5
+    limit = 3  # <-- изменено с 5 на 3
     offset = page * limit
 
     requests = await get_all_withdraw_requests(offset, limit)
@@ -666,7 +665,7 @@ async def confirm_withdraw_command(message: types.Message):
     pool = await init_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT user_id, amount_points FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
+            "SELECT user_id, amount_points, wallet_address FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
             request_id
         )
         if not row:
@@ -675,6 +674,7 @@ async def confirm_withdraw_command(message: types.Message):
 
         target_user_id = row['user_id']
         amount_points = row['amount_points']
+        contact = row['wallet_address']
 
         await conn.execute(
             "UPDATE withdraw_requests SET status = 'completed', completed_at = $1 WHERE id = $2",
@@ -693,7 +693,13 @@ async def confirm_withdraw_command(message: types.Message):
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {target_user_id}: {e}")
 
-    await message.answer(f"✅ Заявка #{request_id} подтверждена. Пользователь уведомлён.")
+    await message.answer(
+        f"✅ Заявка #{request_id} подтверждена.\n"
+        f"👤 Пользователь: {target_user_id}\n"
+        f"💸 Сумма: {amount_points} баллов\n"
+        f"📞 Контакт: {contact}\n"
+        f"Пользователь уведомлён."
+    )
 
 @router.message(Command("rejectwithdraw"))
 async def reject_withdraw_command(message: types.Message):
@@ -716,7 +722,7 @@ async def reject_withdraw_command(message: types.Message):
     pool = await init_db_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT user_id, amount_points FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
+            "SELECT user_id, amount_points, wallet_address FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
             request_id
         )
         if not row:
@@ -725,6 +731,7 @@ async def reject_withdraw_command(message: types.Message):
 
         target_user_id = row['user_id']
         amount_points = row['amount_points']
+        contact = row['wallet_address']
 
         await conn.execute(
             "UPDATE withdraw_requests SET status = 'rejected' WHERE id = $1",
@@ -747,4 +754,10 @@ async def reject_withdraw_command(message: types.Message):
     except Exception as e:
         logger.error(f"Не удалось уведомить пользователя {target_user_id}: {e}")
 
-    await message.answer(f"❌ Заявка #{request_id} отклонена. Баллы возвращены пользователю.")
+    await message.answer(
+        f"❌ Заявка #{request_id} отклонена.\n"
+        f"👤 Пользователь: {target_user_id}\n"
+        f"💸 Сумма: {amount_points} баллов\n"
+        f"📞 Контакт: {contact}\n"
+        f"Баллы возвращены пользователю."
+    )
