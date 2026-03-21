@@ -17,7 +17,6 @@ def agreement_short_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📖 Читать соглашение", callback_data="read_full_agreement")]
     ])
 
-# --- Клавиатура для полного соглашения ---
 def agreement_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Принять", callback_data="accept_agreement")]

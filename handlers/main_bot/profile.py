@@ -12,7 +12,6 @@ from database import (
     get_user, get_user_stats, update_balance, claim_daily_bonus,
     get_bonus_total, set_user_started, log_agreement,
     increment_referral_count, increment_withdrawals_count,
-    get_active_tournament, get_tournament_leaders,
     create_withdraw_request
 )
 from keyboards import (
@@ -119,7 +118,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
 async def cmd_myid(message: types.Message):
     await message.answer(f"Ваш Telegram ID: {message.from_user.id}")
 
-# --- Обработчики reply-кнопок главного меню ---
+# --- Обработчики reply-кнопок ---
 @router.message(F.text == "🎰 Сыграть")
 async def reply_play(message: types.Message):
     await message.answer("🎮 Выберите игру:", reply_markup=games_menu_keyboard())
@@ -163,7 +162,7 @@ async def reply_daily_bonus(message: types.Message):
         )
     else:
         user_data = await get_user(user_id)
-        last_bonus = user_data[7]  # daily_bonus_last
+        last_bonus = user_data[7]
         now = int(time.time())
         next_day_start = (now // 86400 + 1) * 86400
         seconds_left = next_day_start - now
@@ -278,9 +277,7 @@ async def achievements_menu_back_callback(callback: types.CallbackQuery):
     text = "🏆 Раздел достижений\n\nВыберите действие:"
     await callback.message.edit_text(text, reply_markup=achievements_menu_keyboard())
 
-# ===== Конец достижений =====
-
-# --- Вывод средств ---
+# ===== Вывод средств =====
 @router.callback_query(F.data == "withdraw")
 async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
@@ -438,10 +435,12 @@ async def accept_agreement_callback(callback: types.CallbackQuery):
     username = callback.from_user.username
     first_name = callback.from_user.first_name
 
+    # Начисляем бонус
     current_balance, *_ = await get_user(user_id, username)
     new_balance = current_balance + 50
     await update_balance(user_id, new_balance)
 
+    # Логируем согласие
     try:
         await log_agreement(user_id)
         log_agreement_to_csv(user_id, username)

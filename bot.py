@@ -21,7 +21,7 @@ from middlewares import UserStatusMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- Flask для поддержания активности ----------
+# ---------- Flask ----------
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -47,14 +47,14 @@ dp = Dispatcher(storage=storage)
 
 dp.message.middleware(UserStatusMiddleware())
 
-# Подключаем роутеры в правильном порядке (profile до fallback)
+# Порядок подключения: profile перед fallback
 dp.include_router(games_router)
-dp.include_router(profile_router)       # ← исправлено: было drp
+dp.include_router(profile_router)   # ← исправлено
 dp.include_router(tournaments_router)
 dp.include_router(admin_actions_router)
 dp.include_router(payments_router)
 dp.include_router(bot_info_router)
-dp.include_router(fallback_router)      # fallback всегда последний
+dp.include_router(fallback_router)  # fallback всегда последний
 
 @dp.errors()
 async def global_error_handler(update: types.Update, exception: Exception):
@@ -88,10 +88,9 @@ async def on_startup():
     logger.info("База данных готова, команды установлены, бот запущен.")
 
 async def main():
-    # Запускаем Flask в фоновом потоке
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    await asyncio.sleep(2)  # даём время Flask стартовать
+    await asyncio.sleep(2)
     dp.startup.register(on_startup)
     await dp.start_polling(bot)
 
