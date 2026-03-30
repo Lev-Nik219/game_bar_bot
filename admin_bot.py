@@ -31,7 +31,7 @@ def favicon():
     return '', 204
 
 def run_flask():
-    port = int(os.getenv('PORT', 8081))
+    port = int(os.getenv('PORT', 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
 # ---------- Telegram Bot ----------
@@ -47,12 +47,12 @@ async def global_error_handler(update: types.Update, exception: Exception):
     try:
         if update.message:
             await update.message.answer(
-                "⚠️ Сервис временно недоступен. Ведутся технические работы. "
+                "⚠️ Сервис временно недоступен. Ведутся технические работы.\n"
                 "Пожалуйста, попробуйте позже."
             )
         elif update.callback_query:
             await update.callback_query.message.answer(
-                "⚠️ Сервис временно недоступен. Ведутся технические работы. "
+                "⚠️ Сервис временно недоступен. Ведутся технические работы.\n"
                 "Пожалуйста, попробуйте позже."
             )
             try:

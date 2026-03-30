@@ -9,24 +9,23 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault
 
-from config import BOT_TOKEN
+from config import MAIN_BOT_TOKEN
 from database import create_db
 from handlers.main_bot import (
     games_router, profile_router, tournaments_router,
-    admin_actions_router, payments_router, fallback_router,
-    bot_info_router
+    payments_router, fallback_router, bot_info_router
 )
 from middlewares import UserStatusMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- Flask ----------
+# ---------- Flask для поддержания активности ----------
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def home():
-    return jsonify({"status": "Bot is running", "time": time.time()})
+    return jsonify({"status": "Main bot is running", "time": time.time()})
 
 @flask_app.route('/health')
 def health():
@@ -37,24 +36,22 @@ def favicon():
     return '', 204
 
 def run_flask():
-    port = int(os.getenv('PORT', 8080))
+    port = int(os.getenv('PORT', 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
 # ---------- Telegram Bot ----------
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=MAIN_BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 dp.message.middleware(UserStatusMiddleware())
 
-# Порядок подключения: profile перед fallback
 dp.include_router(games_router)
-dp.include_router(profile_router)   # ← исправлено
+dp.include_router(profile_router)
 dp.include_router(tournaments_router)
-dp.include_router(admin_actions_router)
 dp.include_router(payments_router)
 dp.include_router(bot_info_router)
-dp.include_router(fallback_router)  # fallback всегда последний
+dp.include_router(fallback_router)
 
 @dp.errors()
 async def global_error_handler(update: types.Update, exception: Exception):
@@ -62,12 +59,12 @@ async def global_error_handler(update: types.Update, exception: Exception):
     try:
         if update.message:
             await update.message.answer(
-                "⚠️ Сервис временно недоступен. Ведутся технические работы. "
+                "⚠️ Сервис временно недоступен. Ведутся технические работы.\n"
                 "Пожалуйста, попробуйте позже."
             )
         elif update.callback_query:
             await update.callback_query.message.answer(
-                "⚠️ Сервис временно недоступен. Ведутся технические работы. "
+                "⚠️ Сервис временно недоступен. Ведутся технические работы.\n"
                 "Пожалуйста, попробуйте позже."
             )
             try:
@@ -83,6 +80,7 @@ async def on_startup():
     commands = [
         BotCommand(command="start", description="Запустить бота"),
         BotCommand(command="myid", description="Мой Telegram ID"),
+        BotCommand(command="cancel", description="Отменить текущее действие"),
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
     logger.info("База данных готова, команды установлены, бот запущен.")

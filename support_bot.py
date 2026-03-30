@@ -31,9 +31,8 @@ def favicon():
     return '', 204
 
 def run_flask():
-    port = int(os.getenv('PORT', 10000))  # Render ожидает порт 10000
-    print(f"🚀 Запуск Flask на порту {port}")
-    flask_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+    port = int(os.getenv('PORT', 10000))
+    flask_app.run(host='0.0.0.0', port=port)
 
 # ---------- Telegram Bot ----------
 bot = Bot(token=SUPPORT_BOT_TOKEN)
@@ -45,8 +44,9 @@ ID_PATTERN = r"ID:\s*(\d+)"
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 Здравствуйте! Это бот поддержки. Напишите ваш вопрос, "
-        "и администратор ответит вам в ближайшее время."
+        "👋 Здравствуйте! Это бот поддержки.\n\n"
+        "Напишите ваш вопрос, и администратор ответит вам в ближайшее время.\n\n"
+        "📌 Для связи с администратором используйте эту команду: /start"
     )
 
 @dp.message()
@@ -60,7 +60,8 @@ async def handle_message(message: types.Message):
                 try:
                     await bot.send_message(
                         target_user_id,
-                        f"📨 Ответ от администратора:\n\n{message.text}"
+                        f"📨 <b>Ответ от администратора:</b>\n\n{message.text}",
+                        parse_mode="HTML"
                     )
                     await message.reply("✅ Ответ отправлен пользователю.")
                 except Exception as e:
@@ -68,34 +69,42 @@ async def handle_message(message: types.Message):
             else:
                 await message.reply("❌ Не удалось определить, кому адресован ответ.")
         else:
-            await message.reply("Чтобы ответить пользователю, используйте 'ответить' на его сообщение.")
+            await message.reply(
+                "Чтобы ответить пользователю, используйте 'ответить' на его сообщение.\n\n"
+                "В сообщении пользователя есть его ID."
+            )
         return
 
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
                 admin_id,
-                f"📩 Сообщение от @{message.from_user.username or 'пользователь'} "
-                f"(ID: {user_id}):\n\n{message.text}",
-                reply_markup=None
+                f"📩 <b>Сообщение от пользователя</b>\n\n"
+                f"👤 @{message.from_user.username or 'нет username'} (ID: {user_id})\n"
+                f"📝 Сообщение:\n{message.text}\n\n"
+                f"💡 Чтобы ответить, нажмите 'Ответить' на это сообщение.",
+                parse_mode="HTML"
             )
         except Exception as e:
             logger.error(f"Не удалось отправить сообщение администратору {admin_id}: {e}")
 
-    await message.reply("✅ Ваше сообщение отправлено администратору. Ожидайте ответа.")
+    await message.reply(
+        "✅ Ваше сообщение отправлено администратору.\n"
+        "Ожидайте ответа в ближайшее время."
+    )
 
 @dp.errors()
 async def global_error_handler(update: types.Update, exception: Exception):
-    logger.error(f"Глобальная ошибка в админ-боте: {exception}", exc_info=True)
+    logger.error(f"Глобальная ошибка в боте поддержки: {exception}", exc_info=True)
     try:
         if update.message:
             await update.message.answer(
-                "⚠️ Сервис временно недоступен. Ведутся технические работы. "
+                "⚠️ Сервис временно недоступен. Ведутся технические работы.\n"
                 "Пожалуйста, попробуйте позже."
             )
         elif update.callback_query:
             await update.callback_query.message.answer(
-                "⚠️ Сервис временно недоступен. Ведутся технические работы. "
+                "⚠️ Сервис временно недоступен. Ведутся технические работы.\n"
                 "Пожалуйста, попробуйте позже."
             )
             try:
@@ -107,11 +116,9 @@ async def global_error_handler(update: types.Update, exception: Exception):
     return True
 
 async def main():
-    # Запускаем Flask в фоновом потоке
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    # Даём время Flask запуститься
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

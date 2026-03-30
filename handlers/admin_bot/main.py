@@ -7,15 +7,14 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
-from database import init_db_pool
-from config import MAIN_BOT_TOKEN, ADMIN_IDS
 
+from config import MAIN_BOT_TOKEN, ADMIN_IDS
 from database import (
-    get_user, update_balance, get_user_stats,
-    get_all_users, get_users_count, get_bonus_total,
-    init_db_pool, create_withdraw_request, get_pending_withdraw_requests,
-    get_all_withdraw_requests, count_withdraw_requests, update_withdraw_request_status,
-    create_crypto_transaction, get_crypto_transaction, update_crypto_transaction_status
+    get_user, update_balance, get_user_stats, get_all_users,
+    get_users_count, get_bonus_total, init_db_pool,
+    get_pending_withdraw_requests, get_all_withdraw_requests,
+    count_withdraw_requests, update_withdraw_request_status,
+    create_withdraw_request, add_deposit
 )
 from keyboards import (
     admin_main_keyboard, admin_cancel_keyboard, admin_back_keyboard,
@@ -29,29 +28,25 @@ from states import (
 logger = logging.getLogger(__name__)
 router = Router()
 
-# ---- Вспомогательные функции для отправки сообщений через основного бота ----
+# ---- HTTP API для отправки сообщений через основного бота ----
 async def send_message_via_main_bot(chat_id: int, text: str, parse_mode: str = "HTML"):
     """Отправляет сообщение через основного бота, используя HTTP API."""
     url = f"https://api.telegram.org/bot{MAIN_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload) as resp:
-            return await resp.json()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                return await resp.json()
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения через HTTP API: {e}")
+        return None
 
 async def send_message_via_main_bot_silent(chat_id: int, text: str, parse_mode: str = "HTML"):
-    """Отправляет сообщение, игнорируя ошибки (чтобы не ломать основной поток)."""
+    """Отправляет сообщение, игнорируя ошибки."""
     try:
         await send_message_via_main_bot(chat_id, text, parse_mode)
     except Exception as e:
-        logger.error(f"Ошибка отправки сообщения пользователю {chat_id}: {e}")
-
-# ---- Вспомогательная функция для получения бота по выбору (оставляем для совместимости, но теперь используем HTTP) ----
-async def get_bot_by_choice(choice: str, original_bot: Bot) -> Bot:
-    if choice == "main":
-        # Возвращаем фиктивного бота, который не используется – но лучше не вызывать
-        return None
-    else:
-        return original_bot
+        logger.error(f"Ошибка отправки уведомления пользователю {chat_id}: {e}")
 
 # --- Команда старт ---
 @router.message(Command("start"))
@@ -61,7 +56,7 @@ async def cmd_start(message: types.Message):
         await message.answer("❌ У вас нет доступа к этому боту.")
         return
     await message.answer(
-        "👑 Панель администратора\nВыберите действие:",
+        "👑 Панель администратора\n\nВыберите действие:",
         reply_markup=admin_main_keyboard()
     )
 
@@ -69,7 +64,7 @@ async def cmd_start(message: types.Message):
 async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(
-        "👑 Панель администратора\nВыберите действие:",
+        "👑 Панель администратора\n\nВыберите действие:",
         reply_markup=admin_main_keyboard()
     )
     await callback.answer()
@@ -78,7 +73,7 @@ async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
 async def admin_back(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text(
-        "👑 Панель администратора\nВыберите действие:",
+        "👑 Панель администратора\n\nВыберите действие:",
         reply_markup=admin_main_keyboard()
     )
     await callback.answer()
@@ -129,15 +124,16 @@ async def admin_give_amount(message: types.Message, state: FSMContext):
         f"Новый баланс: {new_balance} 💎."
     )
 
-    # Уведомление пользователю через основного бота (HTTP API)
+    # Уведомление через HTTP API
     await send_message_via_main_bot_silent(
         target_id,
-        f"🎁 Вам начислено {amount} 💎 администратором!\nТекущий баланс: {new_balance} 💎."
+        f"🎁 <b>Вам начислено {amount} 💎 администратором!</b>\n\n"
+        f"Текущий баланс: {new_balance} 💎."
     )
 
     await state.clear()
     await message.answer(
-        "👑 Панель администратора\nВыберите действие:",
+        "👑 Панель администратора\n\nВыберите действие:",
         reply_markup=admin_main_keyboard()
     )
 
@@ -192,12 +188,13 @@ async def admin_take_amount(message: types.Message, state: FSMContext):
 
     await send_message_via_main_bot_silent(
         target_id,
-        f"⚠️ У вас списано {amount} 💎 администратором.\nТекущий баланс: {new_balance} 💎."
+        f"⚠️ <b>У вас списано {amount} 💎 администратором.</b>\n\n"
+        f"Текущий баланс: {new_balance} 💎."
     )
 
     await state.clear()
     await message.answer(
-        "👑 Панель администратора\nВыберите действие:",
+        "👑 Панель администратора\n\nВыберите действие:",
         reply_markup=admin_main_keyboard()
     )
 
@@ -329,7 +326,7 @@ async def admin_stats_callback(callback: types.CallbackQuery):
         total_deposit_sum = await conn.fetchval("SELECT SUM(amount) FROM deposits") or 0
 
     text = (
-        f"📊 <b>Общая статистика</b>\n"
+        f"📊 <b>Общая статистика</b>\n\n"
         f"👥 Всего пользователей: {total_users}\n"
         f"🟢 Активных за 30 дней: {active_users}\n"
         f"💰 Всего депозитов: {total_deposits} на сумму {total_deposit_sum} баллов\n"
@@ -354,16 +351,16 @@ async def admin_withdraw_requests(callback: types.CallbackQuery):
         )
         return
 
-    text = "💸 **Ожидающие заявки:**\n\n"
+    text = "💸 <b>Ожидающие заявки на вывод</b>\n\n"
     for req in requests:
-        text += f"ID: {req[0]}\n"
-        text += f"Пользователь: {req[1]}\n"
-        text += f"Сумма: {req[2]} баллов ≈ {req[3]} USDT\n"
-        text += f"Контакт: {req[4]}\n"
-        text += f"Подтвердить: /confirm_withdraw {req[0]}\n"
-        text += f"Отклонить: /reject_withdraw {req[0]}\n\n"
+        text += f"🆔 ID: <code>{req[0]}</code>\n"
+        text += f"👤 Пользователь: <code>{req[1]}</code>\n"
+        text += f"💸 Сумма: {req[2]} баллов ≈ {req[3]} USDT\n"
+        text += f"📞 Контакт: {req[4]}\n"
+        text += f"✅ /confirm_withdraw {req[0]}\n"
+        text += f"❌ /reject_withdraw {req[0]}\n\n"
 
-    await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=admin_back_keyboard())
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=admin_back_keyboard())
     await callback.answer()
 
 # ===== История заявок на вывод =====
@@ -379,7 +376,7 @@ async def admin_withdraw_history_callback(callback: types.CallbackQuery, state: 
 async def show_withdraw_history(message: types.Message, state: FSMContext, edit=False):
     data = await state.get_data()
     page = data.get("withdraw_history_page", 0)
-    limit = 3
+    limit = 5
     offset = page * limit
 
     requests = await get_all_withdraw_requests(offset, limit)
@@ -389,11 +386,11 @@ async def show_withdraw_history(message: types.Message, state: FSMContext, edit=
     if not requests:
         text = "📜 Нет заявок на вывод."
     else:
-        text = f"📜 Общие заявки на вывод — страница {page+1}/{total_pages}:\n\n"
+        text = f"📜 <b>Общие заявки на вывод — страница {page+1}/{total_pages}</b>\n\n"
         for req in requests:
             req_id, uid, amount_points, amount_usdt, wallet, status, created_at, completed_at = req
             status_emoji = "🟡" if status == 'pending' else ("✅" if status == 'completed' else "❌")
-            text += f"{status_emoji} Заявка #{req_id}\n"
+            text += f"{status_emoji} <b>Заявка #{req_id}</b>\n"
             text += f"👤 Пользователь: <code>{uid}</code>\n"
             text += f"💸 Сумма: {amount_points} баллов (~{amount_usdt} USDT)\n"
             text += f"📞 Контакт: {wallet}\n"
@@ -466,20 +463,16 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
     data = await state.get_data()
     bot_choice = data.get("bot_choice", "admin")
 
-    if bot_choice == "main":
-        broadcast_bot = None  # не используем, будем слать через HTTP
-    else:
-        broadcast_bot = message.bot
-
     await message.answer("⏳ Начинаю рассылку...")
+
     pool = await init_db_pool()
     async with pool.acquire() as conn:
         users = await conn.fetch("SELECT user_id FROM users")
+
     success = 0
     failed = 0
 
     if bot_choice == "main":
-        # Отправляем через HTTP
         for (user_id,) in users:
             try:
                 await send_message_via_main_bot(user_id, text)
@@ -488,19 +481,22 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
             except Exception:
                 failed += 1
     else:
-        # Отправляем через админ-бота
         for (user_id,) in users:
             try:
-                await broadcast_bot.send_message(user_id, text)
+                await message.bot.send_message(user_id, text)
                 success += 1
                 await asyncio.sleep(0.05)
             except Exception:
                 failed += 1
 
-    await message.answer(f"✅ Рассылка завершена.\nУспешно: {success}\nНеудачно: {failed}")
+    await message.answer(
+        f"✅ Рассылка завершена.\n\n"
+        f"📨 Успешно: {success}\n"
+        f"❌ Неудачно: {failed}"
+    )
     await state.clear()
     await message.answer(
-        "👑 Панель администратора\nВыберите действие:",
+        "👑 Панель администратора\n\nВыберите действие:",
         reply_markup=admin_main_keyboard()
     )
 
@@ -559,7 +555,7 @@ async def create_tournament_duration(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Турнир «{name}» создан и продлится {hours} часов.")
     await state.clear()
     await message.answer(
-        "👑 Панель администратора\nВыберите действие:",
+        "👑 Панель администратора\n\nВыберите действие:",
         reply_markup=admin_main_keyboard()
     )
 
@@ -595,8 +591,8 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
 
     await send_message_via_main_bot_silent(
         user_id,
-        f"✅ Ваш запрос на вывод {amount_points} баллов подтверждён администратором!\n"
-        f"Средства будут отправлены на указанный вами контакт."
+        f"✅ <b>Ваш запрос на вывод {amount_points} баллов подтверждён администратором!</b>\n\n"
+        f"Средства будут отправлены на указанный вами контакт в ближайшее время."
     )
 
     await callback.message.edit_text(
@@ -639,8 +635,9 @@ async def admin_reject_withdraw(callback: types.CallbackQuery):
 
     await send_message_via_main_bot_silent(
         user_id,
-        f"❌ Ваш запрос на вывод {amount_points} баллов был отклонён администратором.\n"
-        f"Средства возвращены на ваш баланс."
+        f"❌ <b>Ваш запрос на вывод {amount_points} баллов был отклонён администратором.</b>\n\n"
+        f"Средства возвращены на ваш баланс.\n"
+        f"Текущий баланс: {new_balance} 💎."
     )
 
     await callback.message.edit_text(
@@ -691,15 +688,15 @@ async def confirm_withdraw_command(message: types.Message):
 
     await send_message_via_main_bot_silent(
         target_user_id,
-        f"✅ Ваш запрос на вывод {amount_points} баллов подтверждён администратором!\n"
+        f"✅ <b>Ваш запрос на вывод {amount_points} баллов подтверждён администратором!</b>\n\n"
         f"Средства будут отправлены на указанный вами контакт."
     )
 
     await message.answer(
-        f"✅ Заявка #{request_id} подтверждена.\n"
-        f"👤 Пользователь: {target_user_id}\n"
+        f"✅ Заявка #{request_id} подтверждена.\n\n"
+        f"👤 Пользователь: <code>{target_user_id}</code>\n"
         f"💸 Сумма: {amount_points} баллов ≈ {amount_rub} руб ≈ {amount_usdt} USDT\n"
-        f"📞 Контакт: {contact}\n"
+        f"📞 Контакт: {contact}\n\n"
         f"Пользователь уведомлён."
     )
 
@@ -749,14 +746,14 @@ async def reject_withdraw_command(message: types.Message):
 
     await send_message_via_main_bot_silent(
         target_user_id,
-        f"❌ Ваш запрос на вывод {amount_points} баллов был отклонён администратором.\n"
+        f"❌ <b>Ваш запрос на вывод {amount_points} баллов был отклонён администратором.</b>\n\n"
         f"Средства возвращены на ваш баланс."
     )
 
     await message.answer(
-        f"❌ Заявка #{request_id} отклонена.\n"
-        f"👤 Пользователь: {target_user_id}\n"
+        f"❌ Заявка #{request_id} отклонена.\n\n"
+        f"👤 Пользователь: <code>{target_user_id}</code>\n"
         f"💸 Сумма: {amount_points} баллов ≈ {amount_rub} руб ≈ {amount_usdt} USDT\n"
-        f"📞 Контакт: {contact}\n"
+        f"📞 Контакт: {contact}\n\n"
         f"Баллы возвращены пользователю."
     )
