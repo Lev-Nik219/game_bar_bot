@@ -14,15 +14,17 @@ from database import (
     get_users_count, get_bonus_total, init_db_pool,
     get_pending_withdraw_requests, get_all_withdraw_requests,
     count_withdraw_requests, update_withdraw_request_status,
-    create_withdraw_request, add_deposit
+    create_withdraw_request, add_deposit, get_withdraw_stats,
+    get_deposit_stats, get_user_withdraw_stats, get_user_deposit_stats
 )
 from keyboards import (
     admin_main_keyboard, admin_cancel_keyboard, admin_back_keyboard,
-    admin_bot_choice_keyboard
+    admin_bot_choice_keyboard, admin_stats_keyboard, admin_stats_back_keyboard
 )
 from states import (
     AdminGiveStates, AdminTakeStates, AdminUserInfoStates,
-    AdminBroadcastStates, CreateTournamentStates, AdminListStates
+    AdminBroadcastStates, CreateTournamentStates, AdminListStates,
+    AdminStatsUserStates
 )
 
 logger = logging.getLogger(__name__)
@@ -124,7 +126,6 @@ async def admin_give_amount(message: types.Message, state: FSMContext):
         f"Новый баланс: {new_balance} 💎."
     )
 
-    # Уведомление через HTTP API
     await send_message_via_main_bot_silent(
         target_id,
         f"🎁 <b>Вам начислено {amount} 💎 администратором!</b>\n\n"
@@ -230,6 +231,10 @@ async def admin_userinfo_result(message: types.Message, state: FSMContext):
     losses = total_games - wins
     win_percent = (wins / total_games * 100) if total_games > 0 else 0
 
+    # Получаем статистику выводов и пополнений пользователя
+    withdraw_stats = await get_user_withdraw_stats(target_id)
+    deposit_stats = await get_user_deposit_stats(target_id)
+
     info_text = (
         f"👤 <b>Информация о пользователе</b>\n"
         f"🆔 <b>ID:</b> <code>{target_id}</code>\n"
@@ -238,8 +243,15 @@ async def admin_userinfo_result(message: types.Message, state: FSMContext):
         f"🎮 <b>Всего игр:</b> {total_games}\n"
         f"🏆 <b>Побед:</b> {wins}\n"
         f"💔 <b>Проигрышей:</b> {losses}\n"
-        f"📊 <b>Процент побед:</b> {win_percent:.1f}%"
+        f"📊 <b>Процент побед:</b> {win_percent:.1f}%\n\n"
+        f"💸 <b>Статистика выводов:</b>\n"
+        f"   Всего: {withdraw_stats['count']} на {withdraw_stats['total']} баллов\n"
+        f"   Успешных: {withdraw_stats['completed']} на {withdraw_stats['completed_amount']} баллов\n"
+        f"   Ожидающих: {withdraw_stats['pending']}\n\n"
+        f"💰 <b>Статистика пополнений:</b>\n"
+        f"   Всего: {deposit_stats['count']} на {deposit_stats['total']} баллов"
     )
+    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
     ])
@@ -309,9 +321,23 @@ async def admin_list_prev(callback: types.CallbackQuery, state: FSMContext):
     await show_users_page(callback.message, state, edit=True)
     await callback.answer()
 
-# ===== Статистика =====
+# ===== Статистика (общая) =====
 @router.callback_query(F.data == "admin_stats")
-async def admin_stats_callback(callback: types.CallbackQuery):
+async def admin_stats_callback(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    await state.update_data(stats_submenu=True)
+    await callback.message.edit_text(
+        "📊 <b>Статистика</b>\n\nВыберите тип статистики:",
+        parse_mode="HTML",
+        reply_markup=admin_stats_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_stats_main")
+async def admin_stats_main_callback(callback: types.CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
@@ -332,8 +358,106 @@ async def admin_stats_callback(callback: types.CallbackQuery):
         f"💰 Всего депозитов: {total_deposits} на сумму {total_deposit_sum} баллов\n"
         f"⏳ Ожидающих выводов: {pending_withdrawals}"
     )
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=admin_back_keyboard())
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=admin_stats_back_keyboard())
     await callback.answer()
+
+@router.callback_query(F.data == "admin_stats_withdrawals")
+async def admin_stats_withdrawals_callback(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+
+    stats = await get_withdraw_stats()
+    
+    text = (
+        f"💸 <b>Статистика выводов</b>\n\n"
+        f"📊 <b>Всего заявок:</b> {stats['total_requests']}\n"
+        f"✅ <b>Успешных выводов:</b> {stats['completed_requests']}\n"
+        f"❌ <b>Отклонённых:</b> {stats['rejected_requests']}\n"
+        f"⏳ <b>Ожидают:</b> {stats['pending_requests']}\n\n"
+        f"💰 <b>Общая сумма успешных выводов:</b>\n"
+        f"   {stats['completed_amount']} баллов\n"
+        f"   ≈ {stats['completed_amount_usdt']} USDT\n"
+        f"   ≈ {stats['completed_amount_rub']} руб\n\n"
+        f"🕐 <b>Среднее время обработки заявки:</b>\n"
+        f"   {stats['avg_processing_time']:.1f} часов"
+    )
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=admin_stats_back_keyboard())
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_stats_deposits")
+async def admin_stats_deposits_callback(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+
+    stats = await get_deposit_stats()
+    
+    text = (
+        f"💰 <b>Статистика пополнений</b>\n\n"
+        f"📊 <b>Всего пополнений:</b> {stats['total_deposits']}\n"
+        f"✅ <b>Успешных:</b> {stats['successful']}\n"
+        f"⏳ <b>В обработке:</b> {stats['pending']}\n"
+        f"❌ <b>Неудачных:</b> {stats['failed']}\n\n"
+        f"💵 <b>Общая сумма пополнений:</b>\n"
+        f"   {stats['total_amount']} баллов\n"
+        f"   ≈ {stats['total_amount_rub']} руб\n"
+        f"   ≈ {stats['total_amount_usdt']} USDT\n\n"
+        f"📈 <b>Средний чек:</b> {stats['avg_amount']:.0f} баллов\n"
+        f"🏆 <b>Максимальное пополнение:</b> {stats['max_amount']} баллов"
+    )
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=admin_stats_back_keyboard())
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_stats_user")
+async def admin_stats_user_callback(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    await state.set_state(AdminStatsUserStates.waiting_for_user_id)
+    await callback.message.edit_text(
+        "Введите ID пользователя для просмотра его статистики выводов и пополнений:",
+        reply_markup=admin_cancel_keyboard()
+    )
+    await callback.answer()
+
+@router.message(AdminStatsUserStates.waiting_for_user_id, F.text)
+async def admin_stats_user_result(message: types.Message, state: FSMContext):
+    try:
+        user_id = int(message.text)
+    except ValueError:
+        await message.answer("❌ ID должен быть числом. Попробуйте снова:", reply_markup=admin_cancel_keyboard())
+        return
+
+    user_data = await get_user_stats(user_id)
+    if not user_data:
+        await message.answer("❌ Пользователь с таким ID не найден в базе данных.", reply_markup=admin_back_keyboard())
+        await state.clear()
+        return
+
+    withdraw_stats = await get_user_withdraw_stats(user_id)
+    deposit_stats = await get_user_deposit_stats(user_id)
+
+    text = (
+        f"📊 <b>Статистика пользователя <code>{user_id}</code></b>\n\n"
+        f"💸 <b>Выводы:</b>\n"
+        f"   Всего: {withdraw_stats['count']} на {withdraw_stats['total']} баллов\n"
+        f"   Успешных: {withdraw_stats['completed']} на {withdraw_stats['completed_amount']} баллов\n"
+        f"   Ожидает: {withdraw_stats['pending']} заявок\n\n"
+        f"💰 <b>Пополнения:</b>\n"
+        f"   Всего: {deposit_stats['count']} на {deposit_stats['total']} баллов\n"
+        f"   Средний чек: {deposit_stats['avg']:.0f} баллов\n"
+        f"   Максимальное: {deposit_stats['max']} баллов"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад в статистику", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="🔙 Назад в админ-панель", callback_data="admin_back")]
+    ])
+    
+    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+    await state.clear()
 
 # ===== Заявки на вывод (новые) =====
 @router.callback_query(F.data == "admin_withdraw_requests")

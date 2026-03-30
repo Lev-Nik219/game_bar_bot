@@ -38,6 +38,9 @@ class AdminUserInfoStates(StatesGroup):
 class AdminListStates(StatesGroup):
     browsing = State()
 
+class AdminStatsUserStates(StatesGroup):
+    waiting_for_user_id = State()
+
 class WithdrawStates(StatesGroup):
     waiting_for_amount = State()
     waiting_for_wallet = State()

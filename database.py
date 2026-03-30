@@ -773,3 +773,113 @@ async def update_withdraw_request_status(request_id: int, status: str, completed
                     status, request_id
                 )
     await execute_with_retry(_update)
+
+    # ===== Статистика выводов и пополнений ===== 
+async def get_withdraw_stats() -> dict:
+    """Возвращает общую статистику по выводам."""
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            # Общая статистика
+            total_requests = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests")
+            completed_requests = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'completed'")
+            rejected_requests = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'rejected'")
+            pending_requests = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'")
+            
+            # Сумма успешных выводов
+            completed_amount = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE status = 'completed'") or 0
+            completed_amount_usdt = await conn.fetchval("SELECT COALESCE(SUM(amount_usdt), 0) FROM withdraw_requests WHERE status = 'completed'") or 0
+            
+            # Среднее время обработки (только для успешных)
+            avg_processing_time = await conn.fetchval(
+                "SELECT AVG(completed_at - created_at) / 3600.0 FROM withdraw_requests WHERE status = 'completed' AND completed_at IS NOT NULL"
+            ) or 0
+            
+        return {
+            "total_requests": total_requests,
+            "completed_requests": completed_requests,
+            "rejected_requests": rejected_requests,
+            "pending_requests": pending_requests,
+            "completed_amount": completed_amount,
+            "completed_amount_usdt": completed_amount_usdt,
+            "completed_amount_rub": round(completed_amount_usdt * 90, 2),
+            "avg_processing_time": avg_processing_time
+        }
+    return await execute_with_retry(_get)
+
+async def get_deposit_stats() -> dict:
+    """Возвращает общую статистику по пополнениям."""
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            # Общая статистика
+            total_deposits = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions")
+            successful = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'paid'")
+            pending = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'pending'")
+            failed = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'failed'")
+            
+            # Сумма пополнений
+            total_amount = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'") or 0
+            
+            # Средний и максимальный чек
+            avg_amount = await conn.fetchval("SELECT COALESCE(AVG(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'") or 0
+            max_amount = await conn.fetchval("SELECT COALESCE(MAX(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'") or 0
+            
+        return {
+            "total_deposits": total_deposits,
+            "successful": successful,
+            "pending": pending,
+            "failed": failed,
+            "total_amount": total_amount,
+            "total_amount_rub": round(total_amount / 1.5, 2),
+            "total_amount_usdt": round(total_amount / 1.5 / 90, 2),
+            "avg_amount": avg_amount,
+            "max_amount": max_amount
+        }
+    return await execute_with_retry(_get)
+
+async def get_user_withdraw_stats(user_id: int) -> dict:
+    """Возвращает статистику выводов для конкретного пользователя."""
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            # Все заявки
+            total_requests = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1", user_id)
+            total_amount = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE user_id = $1", user_id) or 0
+            
+            # Успешные
+            completed = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'completed'", user_id)
+            completed_amount = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE user_id = $1 AND status = 'completed'", user_id) or 0
+            
+            # Ожидающие
+            pending = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'", user_id)
+            
+        return {
+            "count": total_requests,
+            "total": total_amount,
+            "completed": completed,
+            "completed_amount": completed_amount,
+            "pending": pending
+        }
+    return await execute_with_retry(_get)
+
+async def get_user_deposit_stats(user_id: int) -> dict:
+    """Возвращает статистику пополнений для конкретного пользователя."""
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            # Все пополнения
+            total_deposits = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id)
+            total_amount = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id) or 0
+            
+            # Средний и максимальный чек
+            avg_amount = await conn.fetchval("SELECT COALESCE(AVG(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id) or 0
+            max_amount = await conn.fetchval("SELECT COALESCE(MAX(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id) or 0
+            
+        return {
+            "count": total_deposits,
+            "total": total_amount,
+            "avg": avg_amount,
+            "max": max_amount
+        }
+    return await execute_with_retry(_get)
