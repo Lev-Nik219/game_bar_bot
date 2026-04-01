@@ -21,6 +21,9 @@ from middlewares import UserStatusMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Глобальный цикл событий для запуска корутин из Flask
+loop = None
+
 # ---------- Flask ----------
 flask_app = Flask(__name__)
 
