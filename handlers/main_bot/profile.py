@@ -652,13 +652,11 @@ async def back_to_menu_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     username = callback.from_user.username
     first_name = callback.from_user.first_name
-    
+
     await set_user_started(user_id)
-    
+
     text, keyboard = await get_game_over_text_and_keyboard(
         user_id, first_name, username
     )
     await callback.message.delete()
     await callback.message.answer(text, parse_mode="HTML", reply_markup=keyboard)
-
-withdraw_start

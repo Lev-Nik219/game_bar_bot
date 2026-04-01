@@ -195,15 +195,16 @@ async def check_payment(callback: types.CallbackQuery):
 
             await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
 
-            # Кнопка "Вернуться обратно"
+            # Создаём кнопку "Вернуться в меню"
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Вернуться обратно", callback_data="profile")]
+                [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
             ])
 
             await callback.message.edit_text(
                 f"✅ <b>Оплата подтверждена!</b>\n\n"
                 f"💰 Начислено: {amount_points} баллов\n"
-                f"💎 Новый баланс: {new_balance} баллов",
+                f"💎 Новый баланс: {new_balance} баллов\n\n"
+                f"Нажмите на кнопку ниже, чтобы вернуться в главное меню:",
                 parse_mode="HTML",
                 reply_markup=keyboard
             )
