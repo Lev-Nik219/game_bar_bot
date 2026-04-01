@@ -195,9 +195,21 @@ async def check_payment(callback: types.CallbackQuery):
 
             await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
 
+            # Создаём ссылку на основного бота
+            bot_username = (await callback.bot.me()).username
+            bot_link = f"https://t.me/{bot_username}"
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎮 Вернуться в Game Bar", url=bot_link)],
+                [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")]
+            ])
+
             await callback.message.edit_text(
-                f"✅ Оплата подтверждена!\nНачислено {amount_points} баллов.\nНовый баланс: {new_balance} 💎",
-                reply_markup=profile_keyboard(user_id)
+                f"✅ <b>Оплата подтверждена!</b>\n\n"
+                f"💰 Начислено: {amount_points} баллов\n"
+                f"💎 Новый баланс: {new_balance} баллов\n\n"
+                f"Нажмите на кнопку ниже, чтобы вернуться в бота:",
+                parse_mode="HTML",
+                reply_markup=keyboard
             )
         else:
             await callback.answer("❌ Платёж ещё не найден или не оплачен. Попробуйте позже.", show_alert=True)
