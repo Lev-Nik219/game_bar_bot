@@ -1,8 +1,8 @@
-import random
 import logging
 import time
 import asyncio
-import aiogram.exceptions
+import aiosqlite
+from datetime import datetime
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -12,7 +12,10 @@ from database import (
     get_user, get_user_stats, update_balance, claim_daily_bonus,
     get_bonus_total, set_user_started, log_agreement,
     increment_referral_count, increment_withdrawals_count,
-    create_withdraw_request
+    create_withdraw_request, get_demo_games_played,
+    get_daily_withdrawn, get_last_deposit_time, get_pending_withdraw_count,
+    get_daily_total_withdrawn_rub, get_bonus_wagering_status, update_bonus_wagered,
+    DB_NAME
 )
 from keyboards import (
     profile_keyboard, main_reply_keyboard, games_menu_keyboard,
@@ -20,10 +23,16 @@ from keyboards import (
     achievements_menu_keyboard, achievements_back_keyboard
 )
 from states import WithdrawStates
-from config import ADMIN_IDS, ADMIN_BOT_TOKEN
+from config import (
+    ADMIN_IDS, ADMIN_BOT_TOKEN, ADMIN_NAMES,
+    FIRST_WITHDRAW_RATE, STANDARD_WITHDRAW_RATE, USD_RATE,
+    REFERRAL_BONUS_THRESHOLDS, MIN_GAMES_BEFORE_WITHDRAW,
+    DAILY_WITHDRAW_LIMIT, WITHDRAW_COOLDOWN_HOURS,
+    BONUS_WAGER_MULTIPLIER, DAILY_PAYOUT_LIMIT_RUB
+)
 from .common import get_game_over_text_and_keyboard, check_zero_balance_and_notify
 from agreement_logger import log_agreement_to_csv
-from constants import WELCOME_WITH_INVITE_TEMPLATE
+from constants import WELCOME_WITH_INVITE_TEMPLATE, AGREEMENT_SHORT, AGREEMENT_FULL
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -33,17 +42,26 @@ async def get_profile_text(user_id: int, username: str = None) -> str:
      agreed, has_started, referral_count, referral_earnings,
      current_win_streak, max_win_streak, withdrawals_count) = await get_user(user_id, username)
     bonus_total = await get_bonus_total(user_id)
+    real_balance = balance - bonus_total
     win_percent = (wins / total_games * 100) if total_games > 0 else 0
+    
+    bonus_balance, bonus_wagered, is_cleared = await get_bonus_wagering_status(user_id)
+    wagering_status = ""
+    if not is_cleared and bonus_balance > 0:
+        required = bonus_balance * BONUS_WAGER_MULTIPLIER
+        remaining = required - bonus_wagered
+        wagering_status = f"\n🎲 Отыгрыш бонуса: {bonus_wagered}/{required} баллов (осталось {remaining})"
+    
     return (f"👤 <b>Профиль</b>\n"
             f"Баланс: {balance} 💎\n"
             f"Бонусный баланс: {bonus_total} 💎\n"
+            f"Доступно для вывода: {real_balance} 💎\n"
             f"Уровень: {level} (опыт: {exp}/{level*100})\n"
             f"Всего игр: {total_games}\n"
             f"Побед: {wins}\n"
-            f"Процент побед: {win_percent:.1f}%")
+            f"Процент побед: {win_percent:.1f}%{wagering_status}")
 
 async def show_agreement(message: types.Message):
-    from constants import AGREEMENT_SHORT
     await message.answer(
         AGREEMENT_SHORT,
         parse_mode="HTML",
@@ -51,7 +69,6 @@ async def show_agreement(message: types.Message):
     )
 
 async def show_full_agreement(message: types.Message):
-    from constants import AGREEMENT_FULL
     await message.answer(
         AGREEMENT_FULL,
         reply_markup=agreement_keyboard()
@@ -61,7 +78,8 @@ async def show_welcome_with_invite(
     message: types.Message, user_id: int, first_name: str, username: str, bot
 ):
     balance, *_ = await get_user(user_id, username)
-    text = WELCOME_WITH_INVITE_TEMPLATE.format(first_name=first_name, balance=balance)
+    display_name = username if username else first_name
+    text = WELCOME_WITH_INVITE_TEMPLATE.format(username=display_name, balance=balance)
     inline_keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👥 Пригласить друга", callback_data="invite_friend")],
         [InlineKeyboardButton(text="🎮 Начать игру", callback_data="back_to_menu")]
@@ -88,14 +106,13 @@ async def cmd_start(message: types.Message, state: FSMContext):
     has_started = user_data[10]
 
     if ref_id is not None and ref_id != user_id:
-        from database import init_db_pool
-        pool = await init_db_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT invited_by FROM users WHERE user_id = $1", user_id)
-            if row and row['invited_by'] is None:
-                await conn.execute("UPDATE users SET invited_by = $1 WHERE user_id = $2", ref_id, user_id)
+        async with aiosqlite.connect(DB_NAME) as db:
+            cursor = await db.execute("SELECT invited_by FROM users WHERE user_id = ?", (user_id,))
+            row = await cursor.fetchone()
+            if row and row[0] is None:
+                await db.execute("UPDATE users SET invited_by = ? WHERE user_id = ?", (ref_id, user_id))
+                await db.commit()
                 await increment_referral_count(ref_id)
-        await pool.close()
 
     if not agreed or (agreed and not has_started):
         await message.answer("🔄 Загрузка...", reply_markup=ReplyKeyboardRemove())
@@ -109,16 +126,14 @@ async def cmd_start(message: types.Message, state: FSMContext):
         return
 
     await state.clear()
-    text, keyboard = await get_game_over_text_and_keyboard(
-        user_id, first_name, username
-    )
+    text, keyboard = await get_game_over_text_and_keyboard(user_id, first_name, username)
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 @router.message(Command("myid"))
 async def cmd_myid(message: types.Message):
     await message.answer(f"Ваш Telegram ID: {message.from_user.id}")
 
-# --- Обработчики reply-кнопок ---
+# --- Обработчики reply-кнопок главного меню ---
 @router.message(F.text == "🎰 Сыграть")
 async def reply_play(message: types.Message):
     await message.answer("🎮 Выберите игру:", reply_markup=games_menu_keyboard())
@@ -152,8 +167,15 @@ async def reply_daily_bonus(message: types.Message):
     back_button = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_menu")]
     ])
+    
+    user_data = await get_user(user_id)
+    daily_streak = user_data[7]
+    remaining_days = 7 - daily_streak
+    streak_text = f"\n\n🔥 {daily_streak} {'день' if daily_streak == 1 else 'дня' if daily_streak in [2,3,4] else 'дней'} подряд! Осталось {remaining_days} {'день' if remaining_days == 1 else 'дня' if remaining_days in [2,3,4] else 'дней'} до супер-бонуса (200 баллов)!"
+    
     if success:
-        await message.answer("🎉 Вы получили 20 бонусных баллов!", reply_markup=back_button)
+        text = f"🎉 Вы получили 20 бонусных баллов!{streak_text}"
+        await message.answer(text, reply_markup=back_button)
         profile_text = await get_profile_text(user_id, message.from_user.username)
         await message.answer(
             profile_text,
@@ -161,17 +183,13 @@ async def reply_daily_bonus(message: types.Message):
             reply_markup=profile_keyboard(user_id)
         )
     else:
-        user_data = await get_user(user_id)
-        last_bonus = user_data[7]
         now = int(time.time())
         next_day_start = (now // 86400 + 1) * 86400
         seconds_left = next_day_start - now
         hours = seconds_left // 3600
         minutes = (seconds_left % 3600) // 60
-        await message.answer(
-            f"❌ Вы уже получали бонус сегодня. Следующий через {hours} ч {minutes} мин.",
-            reply_markup=back_button
-        )
+        text = f"❌ Вы уже получали бонус сегодня. Следующий через {hours} ч {minutes} мин.{streak_text}"
+        await message.answer(text, reply_markup=back_button)
 
 @router.message(F.text == "👥 Пригласить друга")
 async def reply_invite_friend(message: types.Message):
@@ -181,16 +199,33 @@ async def reply_invite_friend(message: types.Message):
     referral_count = user_data[11]
     referral_earnings = user_data[12]
 
+    next_threshold = None
+    for threshold in REFERRAL_BONUS_THRESHOLDS:
+        if referral_count < threshold:
+            next_threshold = threshold
+            break
+    if next_threshold is None:
+        next_threshold = REFERRAL_BONUS_THRESHOLDS[-1]
+        progress_text = "🏆 Вы достигли максимального уровня приглашений!"
+    else:
+        remaining = next_threshold - referral_count
+        filled_bars = referral_count
+        empty_bars = next_threshold - filled_bars
+        bar = "▓" * filled_bars + "░" * empty_bars
+        progress_text = f"🎯 Следующий бонус: {next_threshold} друзей (осталось {remaining})\n[{bar}] {filled_bars}/{next_threshold}"
+
+    rub_earnings = referral_earnings / 2
     bot_username = (await message.bot.me()).username
     link = f"https://t.me/{bot_username}?start={user_id}"
 
     text = (
-        f"👥 Партнёрская программа:\n\n"
+        f"👥 **Партнёрская программа**\n\n"
         f"Приглашайте игроков и получайте:\n"
         f"● 30 баллов за первую игру друга\n"
         f"● 15% от депозита партнёра\n\n"
-        f"👥 Вы пригласили: {referral_count} чел\n"
-        f"🔀 Доход от рефералов: {referral_earnings / 2:.2f} руб\n\n"
+        f"👥 Вы пригласили: **{referral_count}** чел\n"
+        f"{progress_text}\n\n"
+        f"💰 Доход от рефералов: **{referral_earnings} баллов** ≈ **{rub_earnings:.2f} руб**\n\n"
         f"🔗 Ваша партнёрская ссылка:\n{link}\n\n"
         f"📢 Приглашай по этой ссылке своих друзей, отправляй её во все чаты и зарабатывай деньги!"
     )
@@ -243,11 +278,9 @@ async def achievements_all_callback(callback: types.CallbackQuery):
 async def achievements_my_callback(callback: types.CallbackQuery):
     await callback.answer()
     user_id = callback.from_user.id
-    from database import init_db_pool
-    pool = await init_db_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT achievement_id FROM achievements WHERE user_id = $1", user_id)
-    await pool.close()
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT achievement_id FROM achievements WHERE user_id = ?", (user_id,))
+        rows = await cursor.fetchall()
     if rows:
         achievement_names = {
             'first_win': 'Первая победа',
@@ -265,7 +298,7 @@ async def achievements_my_callback(callback: types.CallbackQuery):
             'tournament_5': 'Турнирный боец (5 турниров)',
         }
         text = "🏆 Твои достижения:\n" + "\n".join(
-            f"• {achievement_names.get(row['achievement_id'], row['achievement_id'])}" for row in rows
+            f"• {achievement_names.get(row[0], row[0])}" for row in rows
         )
     else:
         text = "У тебя пока нет достижений. Играй и побеждай!"
@@ -277,39 +310,106 @@ async def achievements_menu_back_callback(callback: types.CallbackQuery):
     text = "🏆 Раздел достижений\n\nВыберите действие:"
     await callback.message.edit_text(text, reply_markup=achievements_menu_keyboard())
 
-# ===== Вывод средств =====
+# ===== Конец достижений =====
+
+# --- Вывод средств ---
+async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_total: int, total_games: int) -> tuple[bool, str]:
+    real_balance = balance - bonus_total
+    
+    if real_balance < 10:
+        return False, f"❌ Минимальная сумма вывода — 10 баллов. Доступно: {real_balance} баллов."
+    
+    if total_games < MIN_GAMES_BEFORE_WITHDRAW:
+        return False, f"❌ Вывод доступен после {MIN_GAMES_BEFORE_WITHDRAW} игр. Сыграно: {total_games}."
+    
+    pending_count = await get_pending_withdraw_count(user_id)
+    if pending_count > 0:
+        async with aiosqlite.connect(DB_NAME) as db:
+            cursor = await db.execute(
+                "SELECT id, amount_points, created_at FROM withdraw_requests WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+                (user_id,)
+            )
+            pending = await cursor.fetchone()
+        if pending:
+            req_id, amount_points, created_at = pending
+            return False, f"❌ У вас уже есть активная заявка #{req_id} на {amount_points} баллов от {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')}. Дождитесь её обработки."
+        return False, "❌ У вас уже есть активная заявка на вывод."
+    
+    daily_withdrawn = await get_daily_withdrawn(user_id)
+    if daily_withdrawn + amount > DAILY_WITHDRAW_LIMIT:
+        return False, f"❌ Дневной лимит: {DAILY_WITHDRAW_LIMIT} баллов. Сегодня выведено: {daily_withdrawn}."
+    
+    last_deposit = await get_last_deposit_time(user_id)
+    cooldown_seconds = WITHDRAW_COOLDOWN_HOURS * 3600
+    if last_deposit > 0 and time.time() - last_deposit < cooldown_seconds:
+        hours_left = (cooldown_seconds - (time.time() - last_deposit)) // 3600
+        return False, f"❌ Вывод доступен через {hours_left} ч после пополнения."
+    
+    bonus_balance, bonus_wagered, is_cleared = await get_bonus_wagering_status(user_id)
+    if not is_cleared and bonus_balance > 0:
+        required = bonus_balance * BONUS_WAGER_MULTIPLIER
+        remaining = required - bonus_wagered
+        return False, f"❌ Бонус не отыгран. Нужно сыграть ещё {remaining} баллов."
+    
+    return True, "OK"
+
 @router.callback_query(F.data == "withdraw")
 async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
+    
     user_id = callback.from_user.id
     username = callback.from_user.username
     user_data = await get_user(user_id, username)
     balance = user_data[0]
+    bonus_total = await get_bonus_total(user_id)
+    total_games = user_data[1]
     withdrawals_count = user_data[15]
-
-    if balance < 10:
-        await callback.answer(
-            f"❌ Минимальная сумма вывода — 10 баллов. У вас {balance}",
-            show_alert=True
-        )
+    real_balance = balance - bonus_total
+    
+    allowed, error_msg = await check_withdraw_limits(user_id, 0, balance, bonus_total, total_games)
+    if not allowed:
+        # Отправляем сообщение в чат, а не только алерт
+        await callback.message.answer(error_msg, parse_mode="HTML")
         return
-
+    
     if withdrawals_count == 0:
-        rate = 4.5
-        rate_text = "4.5 балла = 1 рубль (первый вывод)"
+        rate = FIRST_WITHDRAW_RATE
+        rate_text = f"{FIRST_WITHDRAW_RATE} балла = 1 рубль (первый вывод)"
+        explanation = (
+            "ℹ️ <b>Почему первый вывод по курсу 3.5?</b>\n"
+            "• Вы получили 50 бонусных баллов за регистрацию\n"
+            "• Реферальные бонусы также увеличивают ваш баланс\n"
+            "• Это защита от бонус-хантеров, которые пытаются вывести бонусы, не играя\n\n"
+            "💡 <b>Совет:</b> Сыграйте несколько игр, и со второго вывода курс станет 2 балла = 1 рубль\n"
+            "🎁 Вы всё равно в плюсе: за 1000 руб вы получаете 1500 баллов, а вывести можете по 3.5 (≈428 руб) + бонусы!"
+        )
     else:
-        rate = 2.0
-        rate_text = "2 балла = 1 рубль"
-
-    max_rub = int(balance / rate)
-    max_usdt = round(max_rub / 90, 2) if max_rub > 0 else 0
-
+        rate = STANDARD_WITHDRAW_RATE
+        rate_text = f"{STANDARD_WITHDRAW_RATE} балла = 1 рубль"
+        explanation = (
+            "ℹ️ Курс вывода: 2 балла = 1 рубль\n"
+            "🎉 Поздравляем! Вы прошли первый вывод, теперь курс для вас стандартный."
+        )
+    
+    max_rub = int(real_balance / rate)
+    max_usdt = round(max_rub / USD_RATE, 2) if max_rub > 0 else 0
+    
     await state.set_state(WithdrawStates.waiting_for_amount)
-    await callback.message.edit_text(
-        f"💸 Введите сумму для вывода в баллах (минимум 10, максимум {balance}):\n\n"
-        f"Курс: {rate_text}\n"
-        f"Вы получите примерно {max_rub} руб ≈ {max_usdt} USDT (1 USDT ≈ 90 руб)\n\n"
-        f"<i>Примечание: первый вывод по специальному курсу 4.5 балла = 1 рубль.</i>",
+    
+    await callback.bot.send_message(
+        chat_id=user_id,
+        text=(
+            f"💸 <b>Вывод средств</b>\n\n"
+            f"Введите сумму для вывода (минимум 10, максимум {real_balance} баллов):\n\n"
+            f"📊 <b>Ваш баланс:</b>\n"
+            f"💰 Общий: {balance} баллов\n"
+            f"🎁 Бонусный: {bonus_total} баллов (не выводится)\n"
+            f"💎 Доступно: {real_balance} баллов\n\n"
+            f"🔄 <b>Курс вывода:</b> {rate_text}\n"
+            f"💵 Вы получите примерно: {max_rub} руб ≈ {max_usdt} USDT\n\n"
+            f"{explanation}\n\n"
+            f"<i>Введите число от 10 до {real_balance}.</i>"
+        ),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Отмена", callback_data="profile")]
@@ -324,17 +424,44 @@ async def withdraw_amount(message: types.Message, state: FSMContext):
         username = message.from_user.username
         user_data = await get_user(user_id, username)
         balance = user_data[0]
-
-        if amount < 10 or amount > balance:
-            await message.answer(f"❌ Сумма должна быть от 10 до {balance}")
+        bonus_total = await get_bonus_total(user_id)
+        total_games = user_data[1]
+        real_balance = balance - bonus_total
+        
+        if amount < 10:
+            await message.answer("❌ Минимальная сумма — 10 баллов.")
             return
-
+        if amount > real_balance:
+            await message.answer(f"❌ Недостаточно средств. Доступно: {real_balance} баллов.")
+            return
+        
+        allowed, error_msg = await check_withdraw_limits(user_id, amount, balance, bonus_total, total_games)
+        if not allowed:
+            await message.answer(error_msg)
+            return
+        
         await state.update_data(amount=amount)
         await state.set_state(WithdrawStates.waiting_for_wallet)
+        
+        withdrawals_count = user_data[15]
+        if withdrawals_count == 0:
+            rate = FIRST_WITHDRAW_RATE
+            rate_text = f"{FIRST_WITHDRAW_RATE} балла = 1 рубль"
+        else:
+            rate = STANDARD_WITHDRAW_RATE
+            rate_text = f"{STANDARD_WITHDRAW_RATE} балла = 1 рубль"
+        
+        amount_rub = round(amount / rate, 2)
+        amount_usdt = round(amount_rub / USD_RATE, 2)
+        
         await message.answer(
-            "📤 Введите ваш контакт для связи (например, @username или номер телефона, "
-            "к которому привязан ваш Telegram):\n"
-            "<i>Админ отправит вам ваши средства с помощью @send</i>",
+            f"💸 <b>Вывод средств</b>\n\n"
+            f"Вы запросили вывод {amount} баллов.\n\n"
+            f"💰 <b>Вы получите:</b>\n"
+            f"• {amount_rub} руб (курс {rate_text})\n"
+            f"• ≈ {amount_usdt} USDT\n\n"
+            f"📤 Введите ваш контакт для связи (@username или номер телефона):\n"
+            f"<i>Админ отправит вам средства с помощью @send</i>",
             parse_mode="HTML"
         )
     except ValueError:
@@ -347,44 +474,94 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     contact = message.text.strip()
     username = message.from_user.username
-
+    
     user_data = await get_user(user_id, username)
     balance = user_data[0]
+    bonus_total = await get_bonus_total(user_id)
+    total_games = user_data[1]
     withdrawals_count = user_data[15]
-
-    if balance < amount_points:
-        await message.answer("❌ Недостаточно средств.")
+    real_balance = balance - bonus_total
+    
+    allowed, error_msg = await check_withdraw_limits(user_id, amount_points, balance, bonus_total, total_games)
+    if not allowed:
+        await message.answer(error_msg)
         await state.clear()
         return
-
+    
+    if amount_points > real_balance:
+        await message.answer(f"❌ Недостаточно средств. Доступно: {real_balance} баллов.")
+        await state.clear()
+        return
+    
     if withdrawals_count == 0:
-        rate = 4.5
-        rate_text = "4.5"
+        rate = FIRST_WITHDRAW_RATE
+        rate_text = "3.5"
     else:
-        rate = 2.0
+        rate = STANDARD_WITHDRAW_RATE
         rate_text = "2"
-
-    new_balance = balance - amount_points
-    await update_balance(user_id, new_balance)
-
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute(
+            "UPDATE users SET balance = balance - ? WHERE user_id = ? AND balance >= ?",
+            (amount_points, user_id, amount_points)
+        )
+        if cursor.rowcount == 0:
+            await message.answer("❌ Ошибка списания средств.")
+            await state.clear()
+            return
+        await db.commit()
+    
     amount_rub = round(amount_points / rate, 2)
-    amount_usdt = round(amount_rub / 90, 2)
-
+    amount_usdt = round(amount_rub / USD_RATE, 2)
+    
     await create_withdraw_request(user_id, amount_points, amount_usdt, contact)
-
     await increment_withdrawals_count(user_id)
-
+    
+    daily_total = await get_daily_total_withdrawn_rub()
+    if daily_total > DAILY_PAYOUT_LIMIT_RUB:
+        asyncio.create_task(notify_admins_about_limit_exceeded())
+    
     asyncio.create_task(notify_admins_about_withdraw(
         user_id, amount_points, amount_rub, amount_usdt, contact,
         username, message.bot, rate_text
     ))
-
+    
+    # Подтверждение пользователю
     await message.answer(
-        f"✅ Заявка на вывод {amount_points} баллов (≈{amount_rub} руб ≈ {amount_usdt} USDT) создана!\n"
-        f"Ожидайте подтверждения администратора.",
-        reply_markup=profile_keyboard(user_id)
+        f"✅ <b>Ваша заявка на вывод принята!</b>\n\n"
+        f"📋 <b>Детали заявки:</b>\n"
+        f"💸 Сумма: {amount_points} баллов\n"
+        f"💰 Вы получите: ≈ {amount_rub} руб ≈ {amount_usdt} USDT\n"
+        f"📞 Контакт: {contact}\n\n"
+        f"⏳ Ожидайте подтверждения администратора.\n\n"
+        f"ℹ️ <b>О курсе вывода:</b>\n"
+        f"• Это {'первый' if withdrawals_count == 1 else ''} вывод {'(курс 3.5)' if withdrawals_count == 1 else '(курс 2)'}\n"
+        f"• Со {'второго' if withdrawals_count == 1 else 'следующего'} вывода курс станет 2 балла = 1 рубль\n\n"
+        f"🔙 Нажмите кнопку ниже, чтобы вернуться в профиль.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")]
+        ])
     )
     await state.clear()
+
+async def notify_admins_about_limit_exceeded():
+    try:
+        admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+        for admin_id in ADMIN_IDS:
+            try:
+                await admin_bot.send_message(
+                    admin_id,
+                    f"⚠️ <b>Превышен дневной лимит выплат!</b>\n"
+                    f"Лимит: {DAILY_PAYOUT_LIMIT_RUB} руб\n"
+                    f"Проверьте заявки.",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
+        await admin_bot.session.close()
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
 
 async def notify_admins_about_withdraw(
     user_id: int, amount_points: int, amount_rub: float,
@@ -408,18 +585,17 @@ async def notify_admins_about_withdraw(
                 await admin_bot.send_message(
                     admin_id,
                     f"🔔 <b>Новая заявка на вывод!</b>\n"
-                    f"Пользователь: <a href='{user_link}'>{username} (ID: {user_id})</a>\n"
-                    f"Контакт: {contact}\n"
-                    f"Сумма: {amount_points} баллов = {amount_rub} руб (курс {rate_text}) "
-                    f"≈ {amount_usdt} USDT",
+                    f"👤 Пользователь: <a href='{user_link}'>{username} (ID: {user_id})</a>\n"
+                    f"📞 Контакт: {contact}\n"
+                    f"💸 Сумма: {amount_points} баллов = {amount_rub} руб (курс {rate_text}) ≈ {amount_usdt} USDT",
                     parse_mode="HTML",
                     reply_markup=keyboard
                 )
             except Exception as e:
-                logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+                logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
         await admin_bot.session.close()
     except Exception as e:
-        logger.error(f"Критическая ошибка в фоновой задаче уведомления админов: {e}")
+        logger.error(f"Ошибка: {e}")
 
 # --- Обработчики для соглашения ---
 @router.callback_query(F.data == "read_full_agreement")
@@ -434,19 +610,24 @@ async def accept_agreement_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     username = callback.from_user.username
     first_name = callback.from_user.first_name
-
-    # Начисляем бонус
+    
     current_balance, *_ = await get_user(user_id, username)
     new_balance = current_balance + 50
     await update_balance(user_id, new_balance)
-
-    # Логируем согласие
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("UPDATE users SET bonus_balance = bonus_balance + 50 WHERE user_id = ?", (user_id,))
+        await db.commit()
+    
     try:
         await log_agreement(user_id)
         log_agreement_to_csv(user_id, username)
     except Exception as e:
-        logger.error(f"Ошибка логирования соглашения: {e}")
-
+        logger.error(f"Ошибка логирования: {e}")
+    
+    from database import reset_demo_games_played
+    await reset_demo_games_played(user_id)
+    
     await callback.message.answer("🎁 Вы получили 50 бонусных баллов за принятие соглашения!")
     await callback.message.delete()
     await show_welcome_with_invite(
@@ -461,7 +642,7 @@ async def invite_friend_callback(callback: types.CallbackQuery):
     link = f"https://t.me/{bot_username}?start={user_id}"
     await callback.message.answer(
         f"🔗 Твоя реферальная ссылка:\n{link}\n\n"
-        f"Отправь её другу. Как только он перейдёт по ней и сыграет одну игру, "
+        f"Отправь её другу. Как только он сыграет одну игру, "
         f"вы оба получите по 30 баллов!"
     )
 
@@ -471,11 +652,13 @@ async def back_to_menu_callback(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     username = callback.from_user.username
     first_name = callback.from_user.first_name
-
+    
     await set_user_started(user_id)
-
+    
     text, keyboard = await get_game_over_text_and_keyboard(
         user_id, first_name, username
     )
     await callback.message.delete()
     await callback.message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
+withdraw_start

@@ -1,7 +1,7 @@
 import asyncio
-import asyncpg
+import aiosqlite
 from aiogram import Bot
-from database import get_user, init_db_pool
+from database import get_user, DB_NAME
 
 async def check_achievements(user_id: int, bot: Bot):
     try:
@@ -15,13 +15,13 @@ async def check_achievements(user_id: int, bot: Bot):
      agreed, has_started, referral_count, referral_earnings,
      current_win_streak, max_win_streak, withdrawals_count) = user
 
-    pool = await init_db_pool()
-    async with pool.acquire() as conn:
-        existing_rows = await conn.fetch(
-            "SELECT achievement_id FROM achievements WHERE user_id = $1",
-            user_id
+    async with aiosqlite.connect(DB_NAME) as conn:
+        # Получаем существующие достижения
+        cursor = await conn.execute(
+            "SELECT achievement_id FROM achievements WHERE user_id = ?",
+            (user_id,)
         )
-        existing = {row['achievement_id'] for row in existing_rows}
+        existing = {row[0] for row in await cursor.fetchall()}
 
         new_achievements = []
 
@@ -58,11 +58,11 @@ async def check_achievements(user_id: int, bot: Bot):
         if total_games >= 500 and 'games_500' not in existing:
             new_achievements.append(('games_500', "Игроман (500 игр)", 600))
         # Турнирный боец
-        tournament_count_row = await conn.fetchrow(
-            "SELECT COUNT(DISTINCT tournament_id) FROM tournament_participants WHERE user_id = $1",
-            user_id
+        cursor = await conn.execute(
+            "SELECT COUNT(DISTINCT tournament_id) FROM tournament_participants WHERE user_id = ?",
+            (user_id,)
         )
-        tournament_count = tournament_count_row[0] if tournament_count_row else 0
+        tournament_count = (await cursor.fetchone())[0] or 0
         if tournament_count >= 5 and 'tournament_5' not in existing:
             new_achievements.append(('tournament_5', "Турнирный боец (5 турниров)", 350))
 
@@ -71,17 +71,17 @@ async def check_achievements(user_id: int, bot: Bot):
             for ach_id, name, prize in new_achievements:
                 try:
                     await conn.execute(
-                        "INSERT INTO achievements (user_id, achievement_id) VALUES ($1, $2)",
-                        user_id, ach_id
+                        "INSERT INTO achievements (user_id, achievement_id) VALUES (?, ?)",
+                        (user_id, ach_id)
                     )
                     total_bonus += prize
-                except asyncpg.IntegrityConstraintViolationError:
-                    pass
+                except aiosqlite.IntegrityError:
+                    pass  # уже существует
             if total_bonus > 0:
                 await conn.execute(
-                    "UPDATE users SET balance = balance + $1 WHERE user_id = $2",
-                    total_bonus, user_id
+                    "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+                    (total_bonus, user_id)
                 )
+                await conn.commit()
                 text = "🏆 Новые достижения:\n" + "\n".join(f"• {name} +{prize} 💎" for _, name, prize in new_achievements)
                 await bot.send_message(user_id, text)
-    await pool.close()

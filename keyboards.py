@@ -1,7 +1,5 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
-from config import MAIN_BOT_USERNAME
 
-# --- Reply-клавиатура главного меню ---
 def main_reply_keyboard() -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="🎰 Сыграть"), KeyboardButton(text="👤 Мой профиль")],
@@ -9,21 +7,20 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🎁 Ежедневный бонус")],
         [KeyboardButton(text="👥 Пригласить друга")]
     ]
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, one_time_keyboard=False)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
-# --- Клавиатура для краткого соглашения ---
 def agreement_short_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📖 Читать соглашение", callback_data="read_full_agreement")]
+        [InlineKeyboardButton(text="📖 Читать полное соглашение", callback_data="read_full_agreement")],
+        [InlineKeyboardButton(text="🎮 Демо-режим", callback_data="demo_mode")]
     ])
 
-# --- Клавиатура для полного соглашения ---
 def agreement_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Принять", callback_data="accept_agreement")]
+        [InlineKeyboardButton(text="✅ Принять", callback_data="accept_agreement")],
+        [InlineKeyboardButton(text="🎮 Демо-режим", callback_data="demo_mode")]
     ])
 
-# --- Клавиатура для раздела "О боте" ---
 def bot_info_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❓ FAQ", callback_data="bot_info_faq")],
@@ -31,7 +28,6 @@ def bot_info_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_menu")]
     ])
 
-# --- Inline-клавиатуры для игр ---
 def games_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [
@@ -55,7 +51,6 @@ def profile_keyboard(user_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_menu")]
     ])
 
-# --- Клавиатуры для достижений ---
 def achievements_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Все достижения", callback_data="achievements_all")],
@@ -68,23 +63,28 @@ def achievements_back_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔙 Назад", callback_data="achievements_menu")]
     ])
 
-# --- Клавиатура пополнения ---
 def deposit_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1000 баллов — 667 руб (≈7.41 USDT)", callback_data="deposit_1000")],
-        [InlineKeyboardButton(text="750 баллов — 500 руб (≈5.56 USDT)", callback_data="deposit_750")],
-        [InlineKeyboardButton(text="500 баллов — 333 руб (≈3.70 USDT)", callback_data="deposit_500")],
-        [InlineKeyboardButton(text="250 баллов — 167 руб (≈1.86 USDT)", callback_data="deposit_250")],
+        [InlineKeyboardButton(text="1000 баллов ≈ 667 руб (≈7.41 USDT)", callback_data="deposit_1000")],
+        [InlineKeyboardButton(text="750 баллов ≈ 500 руб (≈5.56 USDT)", callback_data="deposit_750")],
+        [InlineKeyboardButton(text="500 баллов ≈ 333 руб (≈3.70 USDT)", callback_data="deposit_500")],
+        [InlineKeyboardButton(text="250 баллов ≈ 167 руб (≈1.86 USDT)", callback_data="deposit_250")],
         [InlineKeyboardButton(text="💰 Другая сумма", callback_data="deposit_custom")],
         [InlineKeyboardButton(text="🔙 Назад в профиль", callback_data="profile")]
     ])
 
-# --- Другие клавиатуры ---
-def cancel_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Отмена", callback_data="cancel")]])
-
 def back_to_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]])
+
+def quick_bet_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔟", callback_data="bet_10"),
+         InlineKeyboardButton(text="5️⃣0️⃣", callback_data="bet_50"),
+         InlineKeyboardButton(text="1️⃣0️⃣0️⃣", callback_data="bet_100")],
+        [InlineKeyboardButton(text="5️⃣0️⃣0️⃣", callback_data="bet_500"),
+         InlineKeyboardButton(text="✏️ Своя сумма", callback_data="bet_custom")],
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="cancel_bet")]
+    ])
 
 def roulette_choice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -94,42 +94,41 @@ def roulette_choice_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="🟡 Четное", callback_data="roulette_parity_even")],
         [InlineKeyboardButton(text="🔵 Нечетное", callback_data="roulette_parity_odd"),
          InlineKeyboardButton(text="🎯 Конкретное число", callback_data="roulette_specific")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="cancel_bet")]
     ])
 
 def blackjack_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎯 Взять карту", callback_data="bj_hit")],
         [InlineKeyboardButton(text="✋ Хватит", callback_data="bj_stand")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="cancel_bet")]
     ])
 
 def bowling_choice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬆️ Больше 3", callback_data="bowling_over"),
          InlineKeyboardButton(text="⬇️ Меньше 4", callback_data="bowling_under")],
-        [InlineKeyboardButton(text="🔙 Отмена", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="cancel_bet")]
     ])
 
 def darts_choice_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🟡 Четное", callback_data="darts_even"),
          InlineKeyboardButton(text="🔵 Нечетное", callback_data="darts_odd")],
-        [InlineKeyboardButton(text="🔙 Отмена", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="cancel_bet")]
     ])
 
-# ===== Клавиатуры для админ-бота =====
 def admin_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Начислить баллы", callback_data="admin_give")],
-        [InlineKeyboardButton(text="➖ Забрать баллы", callback_data="admin_take")],
-        [InlineKeyboardButton(text="👁 Информация о пользователе", callback_data="admin_userinfo")],
-        [InlineKeyboardButton(text="👥 Список игроков", callback_data="admin_list")],
+        [InlineKeyboardButton(text="➕ Начислить баллы", callback_data="admin_give"),
+         InlineKeyboardButton(text="➖ Забрать баллы", callback_data="admin_take")],
+        [InlineKeyboardButton(text="👁 Информация о пользователе", callback_data="admin_userinfo"),
+         InlineKeyboardButton(text="👥 Список игроков", callback_data="admin_list")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
-        [InlineKeyboardButton(text="💸 Новые заявки на вывод", callback_data="admin_withdraw_requests")],
-        [InlineKeyboardButton(text="📜 Общие заявки на вывод", callback_data="admin_withdraw_history")],
-        [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
-        [InlineKeyboardButton(text="🏆 Создать турнир", callback_data="admin_create_tournament")],
+        [InlineKeyboardButton(text="💸 Новые заявки на вывод", callback_data="admin_withdraw_requests"),
+         InlineKeyboardButton(text="📜 Общие заявки на вывод", callback_data="admin_withdraw_history")],
+        [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast"),
+         InlineKeyboardButton(text="🏆 Создать турнир", callback_data="admin_create_tournament")],
     ])
 
 def admin_stats_keyboard() -> InlineKeyboardMarkup:
@@ -158,4 +157,11 @@ def admin_bot_choice_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🤖 Основной бот", callback_data="broadcast_bot_main")],
         [InlineKeyboardButton(text="🔧 Админ-бот (текущий)", callback_data="broadcast_bot_admin")],
         [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_cancel")]
+    ])
+
+# Новая клавиатура для демо-меню (после неудачных попыток)
+def demo_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎮 Вернуться в демо‑меню", callback_data="demo_mode")],
+        [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
     ])

@@ -1,21 +1,24 @@
 import asyncio
 import time
 import logging
-import aiohttp
+import aiosqlite
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
+from database import get_user
 
-from config import MAIN_BOT_TOKEN, ADMIN_IDS
+from config import MAIN_BOT_TOKEN, ADMIN_IDS, ADMIN_NAMES
 from database import (
-    get_user, update_balance, get_user_stats, get_all_users,
-    get_users_count, get_bonus_total, init_db_pool,
-    get_pending_withdraw_requests, get_all_withdraw_requests,
-    count_withdraw_requests, update_withdraw_request_status,
-    create_withdraw_request, add_deposit, get_withdraw_stats,
-    get_deposit_stats, get_user_withdraw_stats, get_user_deposit_stats
+    DB_NAME, get_user, update_balance, get_user_stats,
+    get_all_users, get_users_count, get_bonus_total,
+    create_withdraw_request, get_pending_withdraw_requests,
+    get_all_withdraw_requests, count_withdraw_requests, update_withdraw_request_status,
+    create_crypto_transaction, get_crypto_transaction, update_crypto_transaction_status,
+    get_withdraw_stats, get_deposit_stats, get_user_withdraw_stats, get_user_deposit_stats,
+    get_daily_withdrawn, get_last_deposit_time, get_pending_withdraw_count,
+    get_daily_total_withdrawn_rub, update_bonus_wagered, get_bonus_wagering_status
 )
 from keyboards import (
     admin_main_keyboard, admin_cancel_keyboard, admin_back_keyboard,
@@ -33,6 +36,7 @@ router = Router()
 # ---- HTTP API для отправки сообщений через основного бота ----
 async def send_message_via_main_bot(chat_id: int, text: str, parse_mode: str = "HTML"):
     """Отправляет сообщение через основного бота, используя HTTP API."""
+    import aiohttp
     url = f"https://api.telegram.org/bot{MAIN_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
     try:
@@ -49,6 +53,38 @@ async def send_message_via_main_bot_silent(chat_id: int, text: str, parse_mode: 
         await send_message_via_main_bot(chat_id, text, parse_mode)
     except Exception as e:
         logger.error(f"Ошибка отправки уведомления пользователю {chat_id}: {e}")
+
+# ---- Фоновая задача для проверки висящих заявок ----
+async def check_pending_withdrawals():
+    """Периодическая проверка висящих заявок (каждые 10 минут)."""
+    while True:
+        await asyncio.sleep(600)  # 10 минут
+        try:
+            async with aiosqlite.connect(DB_NAME) as conn:
+                cursor = await conn.execute(
+                    "SELECT id, user_id, amount_points, created_at FROM withdraw_requests WHERE status = 'pending' AND created_at < strftime('%s','now') - 86400"
+                )
+                old_requests = await cursor.fetchall()
+                for req in old_requests:
+                    request_id, user_id, amount_points, created_at = req
+                    # Уведомляем администраторов
+                    for admin_id in ADMIN_IDS:
+                        await send_message_via_main_bot_silent(
+                            admin_id,
+                            f"⚠️ <b>Напоминание о висящей заявке!</b>\n\n"
+                            f"🆔 Заявка #{request_id}\n"
+                            f"👤 Пользователь: <code>{user_id}</code>\n"
+                            f"💸 Сумма: {amount_points} баллов\n"
+                            f"📅 Создана: {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')}\n"
+                            f"⏳ Ожидает более 24 часов.\n\n"
+                            f"Используйте /confirm_withdraw {request_id} или /reject_withdraw {request_id}"
+                        )
+        except Exception as e:
+            logger.error(f"Ошибка в фоновой проверке заявок: {e}")
+
+# Запускаем фоновую задачу при старте
+async def start_background_tasks():
+    asyncio.create_task(check_pending_withdrawals())
 
 # --- Команда старт ---
 @router.message(Command("start"))
@@ -228,12 +264,14 @@ async def admin_userinfo_result(message: types.Message, state: FSMContext):
 
     balance, total_games, wins = stats
     bonus_total = await get_bonus_total(target_id)
+    bonus_balance, bonus_wagered, is_cleared = await get_bonus_wagering_status(target_id)
     losses = total_games - wins
     win_percent = (wins / total_games * 100) if total_games > 0 else 0
 
     # Получаем статистику выводов и пополнений пользователя
     withdraw_stats = await get_user_withdraw_stats(target_id)
     deposit_stats = await get_user_deposit_stats(target_id)
+    pending_count = await get_pending_withdraw_count(target_id)
 
     info_text = (
         f"👤 <b>Информация о пользователе</b>\n"
@@ -244,12 +282,17 @@ async def admin_userinfo_result(message: types.Message, state: FSMContext):
         f"🏆 <b>Побед:</b> {wins}\n"
         f"💔 <b>Проигрышей:</b> {losses}\n"
         f"📊 <b>Процент побед:</b> {win_percent:.1f}%\n\n"
+        f"🎲 <b>Отыгрыш бонуса:</b>\n"
+        f"   Бонусный баланс: {bonus_balance} баллов\n"
+        f"   Отыграно: {bonus_wagered} баллов\n"
+        f"   Нужно: {bonus_balance * 3} баллов\n\n"
         f"💸 <b>Статистика выводов:</b>\n"
         f"   Всего: {withdraw_stats['count']} на {withdraw_stats['total']} баллов\n"
         f"   Успешных: {withdraw_stats['completed']} на {withdraw_stats['completed_amount']} баллов\n"
         f"   Ожидающих: {withdraw_stats['pending']}\n\n"
         f"💰 <b>Статистика пополнений:</b>\n"
-        f"   Всего: {deposit_stats['count']} на {deposit_stats['total']} баллов"
+        f"   Всего: {deposit_stats['count']} на {deposit_stats['total']} баллов\n"
+        f"⏳ <b>Активных заявок:</b> {pending_count}"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -342,14 +385,23 @@ async def admin_stats_main_callback(callback: types.CallbackQuery):
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
 
-    pool = await init_db_pool()
-    async with pool.acquire() as conn:
-        total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("SELECT COUNT(*) FROM users")
+        total_users = (await cursor.fetchone())[0]
+        
         threshold = int(time.time()) - 30*86400
-        active_users = await conn.fetchval("SELECT COUNT(*) FROM users WHERE last_active > $1", threshold)
-        total_deposits = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions WHERE status='paid'")
-        pending_withdrawals = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE status='pending'")
-        total_deposit_sum = await conn.fetchval("SELECT SUM(amount) FROM deposits") or 0
+        cursor = await conn.execute("SELECT COUNT(*) FROM users WHERE last_active > ?", (threshold,))
+        active_users = (await cursor.fetchone())[0]
+        
+        cursor = await conn.execute("SELECT COUNT(*) FROM crypto_transactions WHERE status='paid'")
+        total_deposits = (await cursor.fetchone())[0]
+        
+        cursor = await conn.execute("SELECT COUNT(*) FROM withdraw_requests WHERE status='pending'")
+        pending_withdrawals = (await cursor.fetchone())[0]
+        
+        cursor = await conn.execute("SELECT SUM(amount) FROM deposits")
+        total_deposit_sum_row = await cursor.fetchone()
+        total_deposit_sum = total_deposit_sum_row[0] if total_deposit_sum_row[0] else 0
 
     text = (
         f"📊 <b>Общая статистика</b>\n\n"
@@ -438,6 +490,7 @@ async def admin_stats_user_result(message: types.Message, state: FSMContext):
 
     withdraw_stats = await get_user_withdraw_stats(user_id)
     deposit_stats = await get_user_deposit_stats(user_id)
+    pending_count = await get_pending_withdraw_count(user_id)
 
     text = (
         f"📊 <b>Статистика пользователя <code>{user_id}</code></b>\n\n"
@@ -448,7 +501,8 @@ async def admin_stats_user_result(message: types.Message, state: FSMContext):
         f"💰 <b>Пополнения:</b>\n"
         f"   Всего: {deposit_stats['count']} на {deposit_stats['total']} баллов\n"
         f"   Средний чек: {deposit_stats['avg']:.0f} баллов\n"
-        f"   Максимальное: {deposit_stats['max']} баллов"
+        f"   Максимальное: {deposit_stats['max']} баллов\n\n"
+        f"⏳ <b>Активных заявок:</b> {pending_count}"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -475,16 +529,43 @@ async def admin_withdraw_requests(callback: types.CallbackQuery):
         )
         return
 
+    # Формируем сообщение с кнопками для каждой заявки
     text = "💸 <b>Ожидающие заявки на вывод</b>\n\n"
+    keyboard = []
+    
     for req in requests:
-        text += f"🆔 ID: <code>{req[0]}</code>\n"
-        text += f"👤 Пользователь: <code>{req[1]}</code>\n"
-        text += f"💸 Сумма: {req[2]} баллов ≈ {req[3]} USDT\n"
-        text += f"📞 Контакт: {req[4]}\n"
-        text += f"✅ /confirm_withdraw {req[0]}\n"
-        text += f"❌ /reject_withdraw {req[0]}\n\n"
-
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=admin_back_keyboard())
+        req_id, user_id, amount_points, amount_usdt, wallet = req
+        # Получаем username пользователя для отображения
+        user_data = await get_user(user_id, None)
+        username = user_data[1] if user_data and user_data[1] else str(user_id)
+        
+        text += (
+            f"┌ <b>Заявка #{req_id}</b>\n"
+            f"├ 👤 Пользователь: <code>{username}</code> (ID: {user_id})\n"
+            f"├ 💸 Сумма: {amount_points} баллов ≈ {amount_usdt} USDT\n"
+            f"└ 📞 Контакт: {wallet}\n\n"
+        )
+        
+        # Добавляем кнопки для этой заявки
+        keyboard.append([
+            InlineKeyboardButton(
+                text=f"✅ Подтвердить #{req_id}",
+                callback_data=f"admin_confirm_withdraw_{user_id}_{amount_points}"
+            ),
+            InlineKeyboardButton(
+                text=f"❌ Отклонить #{req_id}",
+                callback_data=f"admin_reject_withdraw_{user_id}"
+            )
+        ])
+    
+    # Добавляем кнопку "Назад"
+    keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
+    
+    await callback.message.edit_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+    )
     await callback.answer()
 
 # ===== История заявок на вывод =====
@@ -509,37 +590,62 @@ async def show_withdraw_history(message: types.Message, state: FSMContext, edit=
 
     if not requests:
         text = "📜 Нет заявок на вывод."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
+        ])
     else:
         text = f"📜 <b>Общие заявки на вывод — страница {page+1}/{total_pages}</b>\n\n"
+        keyboard = []
+        
         for req in requests:
             req_id, uid, amount_points, amount_usdt, wallet, status, created_at, completed_at = req
             status_emoji = "🟡" if status == 'pending' else ("✅" if status == 'completed' else "❌")
-            text += f"{status_emoji} <b>Заявка #{req_id}</b>\n"
-            text += f"👤 Пользователь: <code>{uid}</code>\n"
-            text += f"💸 Сумма: {amount_points} баллов (~{amount_usdt} USDT)\n"
-            text += f"📞 Контакт: {wallet}\n"
-            text += f"📅 Создана: {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')}\n"
+            status_text = "ожидает" if status == 'pending' else ("подтверждена" if status == 'completed' else "отклонена")
+            
+            # Получаем username пользователя
+            user_data = await get_user(uid, None)
+            username = user_data[1] if user_data and user_data[1] else str(uid)
+            
+            text += (
+                f"{status_emoji} <b>Заявка #{req_id}</b>\n"
+                f"👤 Пользователь: <code>{username}</code>\n"
+                f"💸 Сумма: {amount_points} баллов (~{amount_usdt} USDT)\n"
+                f"📞 Контакт: {wallet}\n"
+                f"📅 Создана: {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')}\n"
+            )
             if status == 'completed' and completed_at:
                 text += f"✅ Подтверждена: {datetime.fromtimestamp(completed_at).strftime('%Y-%m-%d %H:%M')}\n"
             elif status == 'rejected':
                 text += f"❌ Отклонена\n"
             text += "\n"
-
-    buttons = []
-    nav_row = []
-    if page > 0:
-        nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data="withdraw_history_prev"))
-    if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data="withdraw_history_next"))
-    if nav_row:
-        buttons.append(nav_row)
-    buttons.append([InlineKeyboardButton(text="🔙 Назад в админ-панель", callback_data="admin_back")])
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+            
+            # Если заявка ещё ожидает, добавляем кнопки для неё
+            if status == 'pending':
+                keyboard.append([
+                    InlineKeyboardButton(
+                        text=f"✅ Подтвердить #{req_id}",
+                        callback_data=f"admin_confirm_withdraw_{uid}_{amount_points}"
+                    ),
+                    InlineKeyboardButton(
+                        text=f"❌ Отклонить #{req_id}",
+                        callback_data=f"admin_reject_withdraw_{uid}"
+                    )
+                ])
+        
+        # Добавляем кнопки навигации
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data="withdraw_history_prev"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data="withdraw_history_next"))
+        if nav_row:
+            keyboard.append(nav_row)
+        keyboard.append([InlineKeyboardButton(text="🔙 Назад в админ-панель", callback_data="admin_back")])
 
     if edit:
-        await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+        await message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
     else:
-        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+        await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
 
 @router.callback_query(F.data == "withdraw_history_next")
 async def withdraw_history_next(callback: types.CallbackQuery, state: FSMContext):
@@ -589,9 +695,9 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
 
     await message.answer("⏳ Начинаю рассылку...")
 
-    pool = await init_db_pool()
-    async with pool.acquire() as conn:
-        users = await conn.fetch("SELECT user_id FROM users")
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute("SELECT user_id FROM users")
+        users = await cursor.fetchall()
 
     success = 0
     failed = 0
@@ -670,12 +776,14 @@ async def create_tournament_duration(message: types.Message, state: FSMContext):
     prize = data['prize']
     now = int(time.time())
     end_time = now + hours * 3600
-    pool = await init_db_pool()
-    async with pool.acquire() as conn:
+    
+    async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute(
-            "INSERT INTO tournaments (name, prize_points, start_time, end_time, status) VALUES ($1, $2, $3, $4, 'active')",
-            name, prize, now, end_time
+            "INSERT INTO tournaments (name, prize_points, start_time, end_time, status) VALUES (?, ?, ?, ?, 'active')",
+            (name, prize, now, end_time)
         )
+        await conn.commit()
+    
     await message.answer(f"✅ Турнир «{name}» создан и продлится {hours} часов.")
     await state.clear()
     await message.answer(
@@ -698,30 +806,79 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
         await callback.answer("❌ Неверный формат данных", show_alert=True)
         return
 
-    pool = await init_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT id FROM withdraw_requests WHERE user_id = $1 AND amount_points = $2 AND status='pending' ORDER BY created_at DESC LIMIT 1",
-            user_id, amount_points
+    # Получаем информацию о заявке
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute(
+            "SELECT id, amount_usdt, wallet_address FROM withdraw_requests WHERE user_id = ? AND amount_points = ? AND status='pending' ORDER BY created_at DESC LIMIT 1",
+            (user_id, amount_points)
         )
+        row = await cursor.fetchone()
         if not row:
             await callback.answer("❌ Заявка не найдена или уже обработана", show_alert=True)
             return
-        request_id = row[0]
-        await conn.execute(
-            "UPDATE withdraw_requests SET status='completed', completed_at=$1 WHERE id=$2",
-            int(time.time()), request_id
-        )
+        request_id, amount_usdt, wallet_address = row
 
+        # Обновляем статус заявки
+        await conn.execute(
+            "UPDATE withdraw_requests SET status='completed', completed_at=? WHERE id=?",
+            (int(time.time()), request_id)
+        )
+        await conn.commit()
+
+        # Получаем username пользователя
+        cursor2 = await conn.execute("SELECT username FROM users WHERE user_id = ?", (user_id,))
+        user_row = await cursor2.fetchone()
+        username = user_row[0] if user_row else None
+
+    # Уведомление пользователю
     await send_message_via_main_bot_silent(
         user_id,
         f"✅ <b>Ваш запрос на вывод {amount_points} баллов подтверждён администратором!</b>\n\n"
         f"Средства будут отправлены на указанный вами контакт в ближайшее время."
     )
 
+    # Формируем сообщение для администратора, который нажал кнопку
+    admin_id = callback.from_user.id
+    admin_name = ADMIN_NAMES.get(admin_id, "Администратор")
+
+    # Создаём ссылку на пользователя
+    if username:
+        user_link = f"https://t.me/{username}"
+        user_link_text = f"@{username}"
+    else:
+        user_link = f"tg://user?id={user_id}"
+        user_link_text = f"пользователь {user_id}"
+
+    # Сообщение для админа
+    admin_message = (
+        f"✅ <b>Заявка #{request_id} подтверждена!</b>\n\n"
+        f"👤 Пользователь: <a href='{user_link}'>{user_link_text}</a>\n"
+        f"📞 Контакт: {wallet_address}\n"
+        f"💸 Сумма: {amount_points} баллов ≈ {amount_usdt} USDT\n\n"
+        f"💡 <b>Для отправки средств:</b>\n"
+        f"1. Нажмите на ссылку выше, чтобы открыть чат с пользователем.\n"
+        f"2. Отправьте команду:\n"
+        f"<code>@send {amount_usdt} USDT</code>\n\n"
+        f"После отправки нажмите «Готово» в админ-панели (если требуется)."
+    )
+
+    # Отправляем сообщение только этому администратору
+    try:
+        await callback.bot.send_message(
+            chat_id=admin_id,
+            text=admin_message,
+            parse_mode="HTML",
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        logger.error(f"Не удалось отправить сообщение администратору {admin_id}: {e}")
+
+    # Обновляем сообщение в админ-панели (убираем кнопки или показываем успех)
     await callback.message.edit_text(
         f"✅ Заявка пользователя {user_id} на {amount_points} баллов подтверждена.\n"
-        f"Пользователь уведомлён."
+        f"Пользователь уведомлён.\n"
+        f"Администратору отправлены инструкции для отправки средств.",
+        reply_markup=admin_back_keyboard()
     )
     await callback.answer("Вывод подтверждён", show_alert=True)
 
@@ -738,20 +895,18 @@ async def admin_reject_withdraw(callback: types.CallbackQuery):
         await callback.answer("❌ Неверный формат данных", show_alert=True)
         return
 
-    pool = await init_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT id, amount_points FROM withdraw_requests WHERE user_id = $1 AND status='pending' ORDER BY created_at DESC LIMIT 1",
-            user_id
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute(
+            "SELECT id, amount_points FROM withdraw_requests WHERE user_id = ? AND status='pending' ORDER BY created_at DESC LIMIT 1",
+            (user_id,)
         )
+        row = await cursor.fetchone()
         if not row:
             await callback.answer("❌ Нет ожидающих заявок у этого пользователя", show_alert=True)
             return
         request_id, amount_points = row
-        await conn.execute(
-            "UPDATE withdraw_requests SET status='rejected' WHERE id=$1",
-            request_id
-        )
+        await conn.execute("UPDATE withdraw_requests SET status='rejected' WHERE id=?", (request_id,))
+        await conn.commit()
 
     balance, *_ = await get_user(user_id, None)
     new_balance = balance + amount_points
@@ -770,7 +925,7 @@ async def admin_reject_withdraw(callback: types.CallbackQuery):
     )
     await callback.answer("Заявка отклонена", show_alert=True)
 
-@router.message(Command("confirmwithdraw"))
+@router.message(Command("confirm_withdraw"))
 async def confirm_withdraw_command(message: types.Message):
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
@@ -779,7 +934,7 @@ async def confirm_withdraw_command(message: types.Message):
 
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("❌ Использование: /confirmwithdraw <ID_заявки>")
+        await message.answer("❌ Использование: /confirm_withdraw <ID_заявки>")
         return
 
     try:
@@ -788,43 +943,51 @@ async def confirm_withdraw_command(message: types.Message):
         await message.answer("❌ ID заявки должен быть числом.")
         return
 
-    pool = await init_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
-            request_id
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute(
+            "SELECT user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE id = ? AND status = 'pending'",
+            (request_id,)
         )
+        row = await cursor.fetchone()
         if not row:
             await message.answer(f"❌ Заявка с ID {request_id} не найдена или уже обработана.")
             return
 
-        target_user_id = row['user_id']
-        amount_points = row['amount_points']
-        amount_usdt = row['amount_usdt']
-        contact = row['wallet_address']
-
+        target_user_id, amount_points, amount_usdt, contact = row
         amount_rub = round(amount_usdt * 90, 2)
 
         await conn.execute(
-            "UPDATE withdraw_requests SET status = 'completed', completed_at = $1 WHERE id = $2",
-            int(time.time()), request_id
+            "UPDATE withdraw_requests SET status = 'completed', completed_at = ? WHERE id = ?",
+            (int(time.time()), request_id)
         )
+        await conn.commit()
 
+    # Получаем данные пользователя
+    user_data = await get_user(target_user_id, None)
+    username = user_data[1] if user_data and user_data[1] else str(target_user_id)
+
+    # Уведомление пользователю
     await send_message_via_main_bot_silent(
         target_user_id,
         f"✅ <b>Ваш запрос на вывод {amount_points} баллов подтверждён администратором!</b>\n\n"
         f"Средства будут отправлены на указанный вами контакт."
     )
 
+    # Формируем команду для @send
+    send_command = f"@send {amount_usdt} {username}"
+
     await message.answer(
         f"✅ Заявка #{request_id} подтверждена.\n\n"
         f"👤 Пользователь: <code>{target_user_id}</code>\n"
         f"💸 Сумма: {amount_points} баллов ≈ {amount_rub} руб ≈ {amount_usdt} USDT\n"
         f"📞 Контакт: {contact}\n\n"
-        f"Пользователь уведомлён."
+        f"📋 <b>Для отправки средств используйте:</b>\n"
+        f"<code>{send_command}</code>\n\n"
+        f"Нажмите на команду, чтобы скопировать её в @send",
+        parse_mode="HTML"
     )
 
-@router.message(Command("rejectwithdraw"))
+@router.message(Command("reject_withdraw"))
 async def reject_withdraw_command(message: types.Message):
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
@@ -833,7 +996,7 @@ async def reject_withdraw_command(message: types.Message):
 
     args = message.text.split()
     if len(args) < 2:
-        await message.answer("❌ Использование: /rejectwithdraw <ID_заявки>")
+        await message.answer("❌ Использование: /reject_withdraw <ID_заявки>")
         return
 
     try:
@@ -842,31 +1005,22 @@ async def reject_withdraw_command(message: types.Message):
         await message.answer("❌ ID заявки должен быть числом.")
         return
 
-    pool = await init_db_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE id = $1 AND status = 'pending'",
-            request_id
+    async with aiosqlite.connect(DB_NAME) as conn:
+        cursor = await conn.execute(
+            "SELECT user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE id = ? AND status = 'pending'",
+            (request_id,)
         )
+        row = await cursor.fetchone()
         if not row:
             await message.answer(f"❌ Заявка с ID {request_id} не найдена или уже обработана.")
             return
 
-        target_user_id = row['user_id']
-        amount_points = row['amount_points']
-        amount_usdt = row['amount_usdt']
-        contact = row['wallet_address']
-
+        target_user_id, amount_points, amount_usdt, contact = row
         amount_rub = round(amount_usdt * 90, 2)
 
-        await conn.execute(
-            "UPDATE withdraw_requests SET status = 'rejected' WHERE id = $1",
-            request_id
-        )
-        await conn.execute(
-            "UPDATE users SET balance = balance + $1 WHERE user_id = $2",
-            amount_points, target_user_id
-        )
+        await conn.execute("UPDATE withdraw_requests SET status = 'rejected' WHERE id = ?", (request_id,))
+        await conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount_points, target_user_id))
+        await conn.commit()
 
     await send_message_via_main_bot_silent(
         target_user_id,
@@ -881,3 +1035,5 @@ async def reject_withdraw_command(message: types.Message):
         f"📞 Контакт: {contact}\n\n"
         f"Баллы возвращены пользователю."
     )
+
+    admin_confirm_withdraw
