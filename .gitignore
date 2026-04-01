@@ -47,3 +47,11 @@ build/
 htmlcov/
 .tox/
 
+
+venv/
+__pycache__/
+*.pyc
+casino.db
+agreements_log.csv
+.env
+*.log
