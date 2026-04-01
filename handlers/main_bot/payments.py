@@ -198,16 +198,26 @@ async def check_payment(callback: types.CallbackQuery):
             # Создаём ссылку на основного бота
             bot_username = (await callback.bot.me()).username
             bot_link = f"https://t.me/{bot_username}"
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🎮 Вернуться в Game Bar", url=bot_link)],
-                [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")]
-            ])
-
+            
+            # Отправляем новое сообщение с кнопкой
+            await callback.bot.send_message(
+                chat_id=user_id,
+                text=f"🎉 <b>Баланс пополнен!</b>\n\n"
+                     f"💰 Начислено: {amount_points} баллов\n"
+                     f"💎 Новый баланс: {new_balance} баллов\n\n"
+                     f"👇 Нажмите кнопку, чтобы вернуться:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Вернуться обратно", url=bot_link)],
+                    [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")]
+                ])
+            )
+            
+            # Обновляем исходное сообщение (кнопки "Я оплатил" заменяем на подтверждение)
             await callback.message.edit_text(
-                f"✅ <b>Оплата подтверждена!</b>\n\n"
+                f"✅ <b>Платёж подтверждён!</b>\n\n"
                 f"💰 Начислено: {amount_points} баллов\n"
-                f"💎 Новый баланс: {new_balance} баллов\n\n"
-                f"🎮 <b>Вернуться в бота:</b> {bot_link}",
+                f"💎 Новый баланс: {new_balance} баллов",
                 parse_mode="HTML"
             )
         else:
