@@ -6,6 +6,7 @@ import os
 from typing import Optional, Tuple, List, Any
 
 DB_URL = os.getenv('DATABASE_URL', 'postgresql://localhost/casino')
+DB_NAME = "casino.db"  # заглушка для совместимости с SQLite-кодом
 _pool = None
 
 async def init_db_pool():
