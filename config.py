@@ -1,33 +1,34 @@
 import os
-from dotenv import load_dotenv
-load_dotenv()
 
-MAIN_BOT_TOKEN = os.getenv('MAIN_BOT_TOKEN', os.getenv('BOT_TOKEN'))
+# Токены ботов (каждый сервис получает ТОЛЬКО свой)
+MAIN_BOT_TOKEN = os.getenv('MAIN_BOT_TOKEN')
 ADMIN_BOT_TOKEN = os.getenv('ADMIN_BOT_TOKEN')
 SUPPORT_BOT_TOKEN = os.getenv('SUPPORT_BOT_TOKEN')
 CRYPTOBOT_TOKEN = os.getenv('CRYPTOBOT_TOKEN')
 
-# ID администратора
+# ID администратора (можно несколько через запятую)
 ADMIN_IDS_STR = os.getenv('ADMIN_IDS', '')
 ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_STR.split(',') if x.strip()]
+# Добавляем второго администратора, если его нет в переменных окружения
 if 1670366784 not in ADMIN_IDS:
     ADMIN_IDS.append(1670366784)
 
+# Имена администраторов для красивых уведомлений
 ADMIN_NAMES = {
     1167503795: "Admin",
     1670366784: "𝑀𝓎 𝓅𝓇𝒾𝓃𝒸𝑒𝓈𝓈❤️‍🔥"
 }
 
-MAIN_BOT_USERNAME = "CasinoMainBot"
+MAIN_BOT_USERNAME = "Game_Bar"  # можно изменить
 
 # Константы для игр
 WIN_REDUCTION_FACTOR = 0.05
 
 # Курсы валют
-RUB_PER_BALL_RATE = 1.5                      # 1.5 рубля за 1 балл (при пополнении)
-FIRST_WITHDRAW_RATE = 3.5                    # первый вывод: 3.5 балла = 1 рубль (компромисс)
-STANDARD_WITHDRAW_RATE = 2.0                 # последующие выводы: 2 балла = 1 рубль
-USD_RATE = 90                                # 1 USDT = 90 рублей
+RUB_PER_BALL_RATE = 1.5
+FIRST_WITHDRAW_RATE = 3.5
+STANDARD_WITHDRAW_RATE = 2.0
+USD_RATE = 90
 
 # Пороги реферальных бонусов
 REFERRAL_BONUS_THRESHOLDS = [1, 3, 5]

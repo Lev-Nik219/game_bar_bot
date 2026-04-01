@@ -43,7 +43,7 @@ dp.include_router(admin_handlers.router)
 
 @dp.errors()
 async def global_error_handler(update: types.Update, exception: Exception):
-    logger.error(f"Глобальная ошибка: {exception}", exc_info=True)
+    logger.error(f"Глобальная ошибка в админ-боте: {exception}", exc_info=True)
     try:
         if update.message:
             await update.message.answer(

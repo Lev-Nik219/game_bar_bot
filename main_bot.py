@@ -10,7 +10,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from config import MAIN_BOT_TOKEN
-# from database import create_db
 from database import create_db
 from handlers.main_bot import (
     games_router, profile_router, tournaments_router,
@@ -21,7 +20,7 @@ from middlewares import UserStatusMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- Flask для поддержания активности ----------
+# ---------- Flask ----------
 flask_app = Flask(__name__)
 
 @flask_app.route('/')
@@ -60,12 +59,12 @@ async def global_error_handler(update: types.Update, exception: Exception):
     try:
         if update.message:
             await update.message.answer(
-                "⚠️ Сервис временно недоступен. Ведутся технические работы. "
+                "⚠️ Сервис временно недоступен. Ведутся технические работы.\n"
                 "Пожалуйста, попробуйте позже."
             )
         elif update.callback_query:
             await update.callback_query.message.answer(
-                "⚠️ Сервис временно недоступен. Ведутся технические работы. "
+                "⚠️ Сервис временно недоступен. Ведутся технические работы.\n"
                 "Пожалуйста, попробуйте позже."
             )
             try:
