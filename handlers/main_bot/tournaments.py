@@ -14,18 +14,23 @@ from .common import get_game_over_text_and_keyboard
 router = Router()
 
 async def get_tournament_message(user_id: int, bot) -> tuple[str, InlineKeyboardMarkup]:
+    """Возвращает текст и клавиатуру для активного турнира."""
     tournament_data = await get_active_tournament()
+
     if not tournament_data:
         text = "🏆 Сейчас нет активных турниров."
         buttons = [
             [InlineKeyboardButton(text="📋 Мои турниры", callback_data="my_tournaments")],
             [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_menu")]
         ]
-        return text, InlineKeyboardMarkup(inline_keyboard=buttons)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        return text, keyboard
 
     tournament_id, name, prize, end_time = tournament_data
+    # Проверяем, не истекло ли время
     if time.time() > end_time:
         await finish_tournament(tournament_id, bot)
+        # После завершения рекурсивно получаем сообщение (теперь без активного турнира)
         return await get_tournament_message(user_id, bot)
 
     leaders = await get_tournament_leaders(tournament_id)
@@ -35,7 +40,9 @@ async def get_tournament_message(user_id: int, bot) -> tuple[str, InlineKeyboard
     time_left = end_time - int(time.time())
     hours = time_left // 3600
     minutes = (time_left % 3600) // 60
-    text += f"⏳ Осталось: {hours} ч {minutes} мин\n\nТоп-10 участников:\n"
+    text += f"⏳ Осталось: {hours} ч {minutes} мин\n\n"
+
+    text += "Топ-10 участников:\n"
     if leaders:
         for i, (uid, uname, score) in enumerate(leaders, 1):
             name_display = uname if uname else f"ID {uid}"
@@ -55,11 +62,14 @@ async def get_tournament_message(user_id: int, bot) -> tuple[str, InlineKeyboard
         buttons.append(join_button)
     buttons.append([InlineKeyboardButton(text="📋 Мои турниры", callback_data="my_tournaments")])
     buttons.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_menu")])
-    return text, InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    return text, keyboard
 
 @router.message(F.text == "🏆 Турниры")
 async def reply_tournaments(message: types.Message):
-    text, keyboard = await get_tournament_message(message.from_user.id, message.bot)
+    user_id = message.from_user.id
+    text, keyboard = await get_tournament_message(user_id, message.bot)
     await message.answer(text, reply_markup=keyboard)
 
 @router.callback_query(F.data.startswith("tournament_join_"))
@@ -67,24 +77,37 @@ async def tournament_join(callback: types.CallbackQuery):
     await callback.answer()
     tournament_id = int(callback.data.split("_")[2])
     user_id = callback.from_user.id
-    if await is_registered_for_tournament(user_id, tournament_id):
+    registered = await is_registered_for_tournament(user_id, tournament_id)
+    if registered:
         await callback.answer("Вы уже участвуете в этом турнире!", show_alert=True)
         return
     await register_for_tournament(user_id, tournament_id)
     await callback.answer("✅ Вы успешно зарегистрированы в турнире!", show_alert=True)
+
+    # Обновляем текущее сообщение
     new_text, new_keyboard = await get_tournament_message(user_id, callback.bot)
-    await callback.message.edit_text(new_text, reply_markup=new_keyboard)
+    try:
+        await callback.message.edit_text(new_text, reply_markup=new_keyboard)
+    except aiogram.exceptions.TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
 
 @router.callback_query(F.data == "my_tournaments")
 async def my_tournaments_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
+    user_id = callback.from_user.id
     data = await state.get_data()
     page = data.get("tournament_page", 0)
-    await show_user_tournaments(callback.message, callback.from_user.id, page,
-                                 callback.from_user.first_name, callback.from_user.username, edit=True)
+    await show_user_tournaments(
+        callback.message, user_id, page,
+        callback.from_user.first_name, callback.from_user.username,
+        edit=True
+    )
 
-async def show_user_tournaments(message: types.Message, user_id: int, page: int,
-                                first_name: str, username: str, edit=False):
+async def show_user_tournaments(
+    message: types.Message, user_id: int, page: int,
+    first_name: str, username: str, edit=False
+):
     limit = 5
     offset = page * limit
     tournaments = await get_user_tournaments(user_id, offset, limit)
@@ -134,8 +157,11 @@ async def tournaments_next(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     page = data.get("tournament_page", 0) + 1
     await state.update_data(tournament_page=page)
-    await show_user_tournaments(callback.message, callback.from_user.id, page,
-                                callback.from_user.first_name, callback.from_user.username, edit=True)
+    await show_user_tournaments(
+        callback.message, callback.from_user.id, page,
+        callback.from_user.first_name, callback.from_user.username,
+        edit=True
+    )
 
 @router.callback_query(F.data == "tournaments_prev")
 async def tournaments_prev(callback: types.CallbackQuery, state: FSMContext):
@@ -143,8 +169,11 @@ async def tournaments_prev(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     page = data.get("tournament_page", 0) - 1
     await state.update_data(tournament_page=page)
-    await show_user_tournaments(callback.message, callback.from_user.id, page,
-                                callback.from_user.first_name, callback.from_user.username, edit=True)
+    await show_user_tournaments(
+        callback.message, callback.from_user.id, page,
+        callback.from_user.first_name, callback.from_user.username,
+        edit=True
+    )
 
 @router.callback_query(F.data == "back_to_tournaments")
 async def back_to_tournaments(callback: types.CallbackQuery, state: FSMContext):
