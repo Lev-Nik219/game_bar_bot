@@ -207,9 +207,8 @@ async def check_payment(callback: types.CallbackQuery):
                 f"✅ <b>Оплата подтверждена!</b>\n\n"
                 f"💰 Начислено: {amount_points} баллов\n"
                 f"💎 Новый баланс: {new_balance} баллов\n\n"
-                f"Нажмите на кнопку ниже, чтобы вернуться в бота:",
-                parse_mode="HTML",
-                reply_markup=keyboard
+                f"🎮 <b>Вернуться в бота:</b> {bot_link}",
+                parse_mode="HTML"
             )
         else:
             await callback.answer("❌ Платёж ещё не найден или не оплачен. Попробуйте позже.", show_alert=True)
