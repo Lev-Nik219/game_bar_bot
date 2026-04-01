@@ -7,9 +7,8 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
-from database import get_user
 
-from config import MAIN_BOT_TOKEN, ADMIN_IDS, ADMIN_NAMES
+from config import ADMIN_BOT_TOKEN, ADMIN_IDS, ADMIN_NAMES, MAIN_BOT_TOKEN
 from database import (
     DB_NAME, get_user, update_balance, get_user_stats,
     get_all_users, get_users_count, get_bonus_total,
@@ -18,7 +17,8 @@ from database import (
     create_crypto_transaction, get_crypto_transaction, update_crypto_transaction_status,
     get_withdraw_stats, get_deposit_stats, get_user_withdraw_stats, get_user_deposit_stats,
     get_daily_withdrawn, get_last_deposit_time, get_pending_withdraw_count,
-    get_daily_total_withdrawn_rub, update_bonus_wagered, get_bonus_wagering_status
+    get_daily_total_withdrawn_rub, update_bonus_wagered, get_bonus_wagering_status,
+    get_demo_games_played, increment_demo_games_played, reset_demo_games_played
 )
 from keyboards import (
     admin_main_keyboard, admin_cancel_keyboard, admin_back_keyboard,
@@ -42,7 +42,10 @@ async def send_message_via_main_bot(chat_id: int, text: str, parse_mode: str = "
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                return await resp.json()
+                result = await resp.json()
+                if not result.get('ok'):
+                    logger.error(f"Ошибка отправки: {result}")
+                return result
     except Exception as e:
         logger.error(f"Ошибка отправки сообщения через HTTP API: {e}")
         return None
@@ -67,7 +70,6 @@ async def check_pending_withdrawals():
                 old_requests = await cursor.fetchall()
                 for req in old_requests:
                     request_id, user_id, amount_points, created_at = req
-                    # Уведомляем администраторов
                     for admin_id in ADMIN_IDS:
                         await send_message_via_main_bot_silent(
                             admin_id,
@@ -268,7 +270,6 @@ async def admin_userinfo_result(message: types.Message, state: FSMContext):
     losses = total_games - wins
     win_percent = (wins / total_games * 100) if total_games > 0 else 0
 
-    # Получаем статистику выводов и пополнений пользователя
     withdraw_stats = await get_user_withdraw_stats(target_id)
     deposit_stats = await get_user_deposit_stats(target_id)
     pending_count = await get_pending_withdraw_count(target_id)
@@ -324,9 +325,7 @@ async def show_users_page(message: types.Message, state: FSMContext, edit=False)
 
     if not users:
         text = "👥 Нет пользователей в базе данных."
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
-        ])
+        keyboard = [[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]
     else:
         text_lines = [f"👥 <b>Все пользователи — страница {page+1}/{total_pages}:</b>"]
         for uid, username, balance, total_games in users:
@@ -334,19 +333,20 @@ async def show_users_page(message: types.Message, state: FSMContext, edit=False)
             text_lines.append(f"🆔 <code>{uid}</code> | {name} | 💎 {balance} | 🎮 {total_games}")
         text = "\n".join(text_lines)
 
-        buttons = []
+        keyboard = []
+        nav_row = []
         if page > 0:
-            buttons.append(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_list_prev"))
+            nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_list_prev"))
         if page < total_pages - 1:
-            buttons.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data="admin_list_next"))
-        nav_buttons = [buttons] if buttons else []
-        back_button = [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
-        keyboard = InlineKeyboardMarkup(inline_keyboard=nav_buttons + [back_button])
+            nav_row.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data="admin_list_next"))
+        if nav_row:
+            keyboard.append(nav_row)
+        keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
 
     if edit:
-        await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+        await message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
     else:
-        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+        await message.answer(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
 
 @router.callback_query(F.data == "admin_list_next")
 async def admin_list_next(callback: types.CallbackQuery, state: FSMContext):
@@ -364,7 +364,7 @@ async def admin_list_prev(callback: types.CallbackQuery, state: FSMContext):
     await show_users_page(callback.message, state, edit=True)
     await callback.answer()
 
-# ===== Статистика (общая) =====
+# ===== Статистика =====
 @router.callback_query(F.data == "admin_stats")
 async def admin_stats_callback(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
@@ -529,13 +529,11 @@ async def admin_withdraw_requests(callback: types.CallbackQuery):
         )
         return
 
-    # Формируем сообщение с кнопками для каждой заявки
     text = "💸 <b>Ожидающие заявки на вывод</b>\n\n"
     keyboard = []
     
     for req in requests:
         req_id, user_id, amount_points, amount_usdt, wallet = req
-        # Получаем username пользователя для отображения
         user_data = await get_user(user_id, None)
         username = user_data[1] if user_data and user_data[1] else str(user_id)
         
@@ -546,7 +544,6 @@ async def admin_withdraw_requests(callback: types.CallbackQuery):
             f"└ 📞 Контакт: {wallet}\n\n"
         )
         
-        # Добавляем кнопки для этой заявки
         keyboard.append([
             InlineKeyboardButton(
                 text=f"✅ Подтвердить #{req_id}",
@@ -558,7 +555,6 @@ async def admin_withdraw_requests(callback: types.CallbackQuery):
             )
         ])
     
-    # Добавляем кнопку "Назад"
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
     
     await callback.message.edit_text(
@@ -590,9 +586,7 @@ async def show_withdraw_history(message: types.Message, state: FSMContext, edit=
 
     if not requests:
         text = "📜 Нет заявок на вывод."
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
-        ])
+        keyboard = [[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]
     else:
         text = f"📜 <b>Общие заявки на вывод — страница {page+1}/{total_pages}</b>\n\n"
         keyboard = []
@@ -600,26 +594,18 @@ async def show_withdraw_history(message: types.Message, state: FSMContext, edit=
         for req in requests:
             req_id, uid, amount_points, amount_usdt, wallet, status, created_at, completed_at = req
             status_emoji = "🟡" if status == 'pending' else ("✅" if status == 'completed' else "❌")
-            status_text = "ожидает" if status == 'pending' else ("подтверждена" if status == 'completed' else "отклонена")
             
-            # Получаем username пользователя
-            user_data = await get_user(uid, None)
-            username = user_data[1] if user_data and user_data[1] else str(uid)
-            
-            text += (
-                f"{status_emoji} <b>Заявка #{req_id}</b>\n"
-                f"👤 Пользователь: <code>{username}</code>\n"
-                f"💸 Сумма: {amount_points} баллов (~{amount_usdt} USDT)\n"
-                f"📞 Контакт: {wallet}\n"
-                f"📅 Создана: {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')}\n"
-            )
+            text += f"{status_emoji} <b>Заявка #{req_id}</b>\n"
+            text += f"👤 Пользователь: <code>{uid}</code>\n"
+            text += f"💸 Сумма: {amount_points} баллов (~{amount_usdt} USDT)\n"
+            text += f"📞 Контакт: {wallet}\n"
+            text += f"📅 Создана: {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')}\n"
             if status == 'completed' and completed_at:
                 text += f"✅ Подтверждена: {datetime.fromtimestamp(completed_at).strftime('%Y-%m-%d %H:%M')}\n"
             elif status == 'rejected':
                 text += f"❌ Отклонена\n"
             text += "\n"
             
-            # Если заявка ещё ожидает, добавляем кнопки для неё
             if status == 'pending':
                 keyboard.append([
                     InlineKeyboardButton(
@@ -632,7 +618,6 @@ async def show_withdraw_history(message: types.Message, state: FSMContext, edit=
                     )
                 ])
         
-        # Добавляем кнопки навигации
         nav_row = []
         if page > 0:
             nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data="withdraw_history_prev"))
@@ -806,7 +791,6 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
         await callback.answer("❌ Неверный формат данных", show_alert=True)
         return
 
-    # Получаем информацию о заявке
     async with aiosqlite.connect(DB_NAME) as conn:
         cursor = await conn.execute(
             "SELECT id, amount_usdt, wallet_address FROM withdraw_requests WHERE user_id = ? AND amount_points = ? AND status='pending' ORDER BY created_at DESC LIMIT 1",
@@ -818,30 +802,23 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
             return
         request_id, amount_usdt, wallet_address = row
 
-        # Обновляем статус заявки
         await conn.execute(
             "UPDATE withdraw_requests SET status='completed', completed_at=? WHERE id=?",
             (int(time.time()), request_id)
         )
         await conn.commit()
 
-        # Получаем username пользователя
         cursor2 = await conn.execute("SELECT username FROM users WHERE user_id = ?", (user_id,))
         user_row = await cursor2.fetchone()
         username = user_row[0] if user_row else None
 
-    # Уведомление пользователю
     await send_message_via_main_bot_silent(
         user_id,
         f"✅ <b>Ваш запрос на вывод {amount_points} баллов подтверждён администратором!</b>\n\n"
         f"Средства будут отправлены на указанный вами контакт в ближайшее время."
     )
 
-    # Формируем сообщение для администратора, который нажал кнопку
     admin_id = callback.from_user.id
-    admin_name = ADMIN_NAMES.get(admin_id, "Администратор")
-
-    # Создаём ссылку на пользователя
     if username:
         user_link = f"https://t.me/{username}"
         user_link_text = f"@{username}"
@@ -849,7 +826,6 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
         user_link = f"tg://user?id={user_id}"
         user_link_text = f"пользователь {user_id}"
 
-    # Сообщение для админа
     admin_message = (
         f"✅ <b>Заявка #{request_id} подтверждена!</b>\n\n"
         f"👤 Пользователь: <a href='{user_link}'>{user_link_text}</a>\n"
@@ -862,7 +838,6 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
         f"После отправки нажмите «Готово» в админ-панели (если требуется)."
     )
 
-    # Отправляем сообщение только этому администратору
     try:
         await callback.bot.send_message(
             chat_id=admin_id,
@@ -873,7 +848,6 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
     except Exception as e:
         logger.error(f"Не удалось отправить сообщение администратору {admin_id}: {e}")
 
-    # Обновляем сообщение в админ-панели (убираем кнопки или показываем успех)
     await callback.message.edit_text(
         f"✅ Заявка пользователя {user_id} на {amount_points} баллов подтверждена.\n"
         f"Пользователь уведомлён.\n"
@@ -962,29 +936,18 @@ async def confirm_withdraw_command(message: types.Message):
         )
         await conn.commit()
 
-    # Получаем данные пользователя
-    user_data = await get_user(target_user_id, None)
-    username = user_data[1] if user_data and user_data[1] else str(target_user_id)
-
-    # Уведомление пользователю
     await send_message_via_main_bot_silent(
         target_user_id,
         f"✅ <b>Ваш запрос на вывод {amount_points} баллов подтверждён администратором!</b>\n\n"
         f"Средства будут отправлены на указанный вами контакт."
     )
 
-    # Формируем команду для @send
-    send_command = f"@send {amount_usdt} {username}"
-
     await message.answer(
         f"✅ Заявка #{request_id} подтверждена.\n\n"
         f"👤 Пользователь: <code>{target_user_id}</code>\n"
         f"💸 Сумма: {amount_points} баллов ≈ {amount_rub} руб ≈ {amount_usdt} USDT\n"
         f"📞 Контакт: {contact}\n\n"
-        f"📋 <b>Для отправки средств используйте:</b>\n"
-        f"<code>{send_command}</code>\n\n"
-        f"Нажмите на команду, чтобы скопировать её в @send",
-        parse_mode="HTML"
+        f"Пользователь уведомлён."
     )
 
 @router.message(Command("reject_withdraw"))
@@ -1035,5 +998,3 @@ async def reject_withdraw_command(message: types.Message):
         f"📞 Контакт: {contact}\n\n"
         f"Баллы возвращены пользователю."
     )
-
-    admin_confirm_withdraw

@@ -1,25 +1,23 @@
 import os
 
-# Токены ботов (каждый сервис получает ТОЛЬКО свой)
+# Токены ботов
 MAIN_BOT_TOKEN = os.getenv('MAIN_BOT_TOKEN')
 ADMIN_BOT_TOKEN = os.getenv('ADMIN_BOT_TOKEN')
 SUPPORT_BOT_TOKEN = os.getenv('SUPPORT_BOT_TOKEN')
 CRYPTOBOT_TOKEN = os.getenv('CRYPTOBOT_TOKEN')
 
-# ID администратора (можно несколько через запятую)
+# ID администратора
 ADMIN_IDS_STR = os.getenv('ADMIN_IDS', '')
 ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_STR.split(',') if x.strip()]
-# Добавляем второго администратора, если его нет в переменных окружения
 if 1670366784 not in ADMIN_IDS:
     ADMIN_IDS.append(1670366784)
 
-# Имена администраторов для красивых уведомлений
 ADMIN_NAMES = {
     1167503795: "Admin",
     1670366784: "𝑀𝓎 𝓅𝓇𝒾𝓃𝒸𝑒𝓈𝓈❤️‍🔥"
 }
 
-MAIN_BOT_USERNAME = "Game_Bar"  # можно изменить
+MAIN_BOT_USERNAME = "Game_Bar"
 
 # Константы для игр
 WIN_REDUCTION_FACTOR = 0.05
