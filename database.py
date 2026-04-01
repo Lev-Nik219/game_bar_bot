@@ -629,6 +629,7 @@ async def get_bot_stats() -> dict:
 
 # ---- Крипто-транзакции ----
 async def create_crypto_transaction(user_id: int, amount_rub: int, amount_points: int, payment_id: str, invoice_id: str):
+    """Создаёт запись о крипто-транзакции."""
     async def _create():
         pool = await init_db_pool()
         async with pool.acquire() as conn:
@@ -651,6 +652,7 @@ async def get_crypto_transaction(payment_id: str) -> Optional[Tuple[int, str]]:
     return await execute_with_retry(_get)
 
 async def get_crypto_transaction_full(payment_id: str) -> Optional[Tuple[int, str, str]]:
+    """Возвращает (amount_points, status, invoice_id)"""
     async def _get():
         pool = await init_db_pool()
         async with pool.acquire() as conn:
