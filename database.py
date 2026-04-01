@@ -9,21 +9,18 @@ DB_URL = os.getenv('DATABASE_URL', 'postgresql://localhost/casino')
 _pool = None
 
 async def init_db_pool():
-    """Инициализирует пул соединений (глобально)."""
     global _pool
     if _pool is None:
         _pool = await asyncpg.create_pool(DB_URL, min_size=1, max_size=10)
     return _pool
 
 async def close_db_pool():
-    """Закрывает пул (вызывать при завершении бота)."""
     global _pool
     if _pool:
         await _pool.close()
         _pool = None
 
 async def execute_with_retry(func, *args, max_attempts=20, base_delay=0.1):
-    """Повторяет попытки при временных ошибках БД."""
     for attempt in range(max_attempts):
         try:
             return await func(*args)
@@ -42,7 +39,6 @@ async def execute_with_retry(func, *args, max_attempts=20, base_delay=0.1):
 
 # ---- Создание таблиц ----
 async def create_db():
-    """Создаёт таблицы (вызывается при старте)."""
     pool = await init_db_pool()
     async with pool.acquire() as conn:
         # Таблица users
@@ -71,9 +67,27 @@ async def create_db():
                 referral_earnings INTEGER DEFAULT 0,
                 current_win_streak INTEGER DEFAULT 0,
                 max_win_streak INTEGER DEFAULT 0,
-                withdrawals_count INTEGER DEFAULT 0
+                withdrawals_count INTEGER DEFAULT 0,
+                demo_games_played INTEGER DEFAULT 0,
+                bonus_balance INTEGER DEFAULT 0,
+                bonus_wagered INTEGER DEFAULT 0
             )
         ''')
+        
+        # Добавляем колонки, если их нет
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN demo_games_played INTEGER DEFAULT 0")
+        except:
+            pass
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN bonus_balance INTEGER DEFAULT 0")
+        except:
+            pass
+        try:
+            await conn.execute("ALTER TABLE users ADD COLUMN bonus_wagered INTEGER DEFAULT 0")
+        except:
+            pass
+        
         # Достижения
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS achievements (
@@ -85,6 +99,7 @@ async def create_db():
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         ''')
+        
         # Турниры
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS tournaments (
@@ -100,6 +115,7 @@ async def create_db():
                 created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
             )
         ''')
+        
         # Участники турниров
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS tournament_participants (
@@ -113,6 +129,7 @@ async def create_db():
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         ''')
+        
         # Крипто-транзакции
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS crypto_transactions (
@@ -128,6 +145,7 @@ async def create_db():
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         ''')
+        
         # Заявки на вывод
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS withdraw_requests (
@@ -143,6 +161,7 @@ async def create_db():
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         ''')
+        
         # Таблица согласий
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS agreements (
@@ -152,6 +171,7 @@ async def create_db():
                 user_agent TEXT
             )
         ''')
+        
         # Депозиты
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS deposits (
@@ -162,6 +182,7 @@ async def create_db():
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         ''')
+        
         # События (множители)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS events (
@@ -173,7 +194,7 @@ async def create_db():
                 active INTEGER DEFAULT 1
             )
         ''')
-        # Уведомления
+        
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS notifications (
                 id SERIAL PRIMARY KEY,
@@ -184,72 +205,7 @@ async def create_db():
                 FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
             )
         ''')
-        # Розыгрыши
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS giveaways (
-                id SERIAL PRIMARY KEY,
-                name TEXT NOT NULL,
-                prize INTEGER NOT NULL,
-                start_time BIGINT NOT NULL,
-                end_time BIGINT NOT NULL,
-                max_winners INTEGER DEFAULT 1,
-                status TEXT DEFAULT 'pending',
-                created_by BIGINT,
-                created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())
-            )
-        ''')
-        # Участники розыгрышей
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS giveaway_participants (
-                giveaway_id INTEGER NOT NULL,
-                user_id BIGINT NOT NULL,
-                joined_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-                PRIMARY KEY (giveaway_id, user_id),
-                FOREIGN KEY (giveaway_id) REFERENCES giveaways(id) ON DELETE CASCADE,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )
-        ''')
-        # Партнёры
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS partners (
-                user_id BIGINT PRIMARY KEY,
-                referral_link TEXT UNIQUE,
-                commission_rate REAL DEFAULT 0.10,
-                total_earned INTEGER DEFAULT 0,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )
-        ''')
-        # Реферальные уровни
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS referral_levels (
-                user_id BIGINT PRIMARY KEY,
-                level INTEGER DEFAULT 1,
-                commission_rate REAL DEFAULT 0.05,
-                total_earned INTEGER DEFAULT 0,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )
-        ''')
-        # Чат с администратором
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS admin_chats (
-                id SERIAL PRIMARY KEY,
-                user_id BIGINT NOT NULL,
-                admin_id BIGINT NOT NULL,
-                last_message_time BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-                UNIQUE(user_id, admin_id)
-            )
-        ''')
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS admin_messages (
-                id SERIAL PRIMARY KEY,
-                chat_id INTEGER NOT NULL,
-                from_user BIGINT NOT NULL,
-                message TEXT,
-                is_reply INTEGER DEFAULT 0,
-                timestamp BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()),
-                FOREIGN KEY (chat_id) REFERENCES admin_chats(id) ON DELETE CASCADE
-            )
-        ''')
+        
     print("✅ Таблицы созданы / проверены.")
 
 # ---- Основные функции работы с пользователями ----
@@ -270,7 +226,6 @@ async def get_user(user_id: int, username: str = None, initial_balance: int = 0)
                     int(time.time()), user_id
                 )
                 return tuple(row)
-            # Новый пользователь
             await conn.execute(
                 "INSERT INTO users (user_id, username, balance, last_active, agreed, has_started) "
                 "VALUES ($1, $2, $3, $4, 0, 0)",
@@ -291,27 +246,21 @@ async def claim_daily_bonus(user_id: int) -> Tuple[bool, int]:
     async def _claim():
         pool = await init_db_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT daily_bonus_last, balance, bonus_total, daily_bonus_streak "
-                "FROM users WHERE user_id = $1",
-                user_id
-            )
-            if not row:
-                return False, 0
-            last_bonus, balance, bonus_total, streak = row
             now = int(time.time())
             today_start = now - (now % 86400)
-            if last_bonus >= today_start:
-                return False, balance
-            new_balance = balance + 20
-            new_bonus_total = bonus_total + 20
-            new_streak = streak + 1
-            await conn.execute(
-                "UPDATE users SET balance = $1, bonus_total = $2, daily_bonus_last = $3, daily_bonus_streak = $4 "
-                "WHERE user_id = $5",
-                new_balance, new_bonus_total, now, new_streak, user_id
+            result = await conn.execute(
+                "UPDATE users SET balance = balance + 20, bonus_total = bonus_total + 20, "
+                "bonus_balance = bonus_balance + 20, "
+                "daily_bonus_last = $1, daily_bonus_streak = daily_bonus_streak + 1 "
+                "WHERE user_id = $2 AND daily_bonus_last < $3",
+                now, user_id, today_start
             )
-            return True, new_balance
+            if result == "UPDATE 1":
+                row = await conn.fetchrow("SELECT balance FROM users WHERE user_id = $1", user_id)
+                return True, row[0]
+            else:
+                row = await conn.fetchrow("SELECT balance FROM users WHERE user_id = $1", user_id)
+                return False, row[0]
     return await execute_with_retry(_claim)
 
 async def update_balance(user_id: int, new_balance: int):
@@ -393,11 +342,10 @@ async def get_users_count(active_days=30) -> int:
         pool = await init_db_pool()
         async with pool.acquire() as conn:
             if active_days == 0:
-                row = await conn.fetchrow("SELECT COUNT(*) FROM users")
+                return await conn.fetchval("SELECT COUNT(*) FROM users")
             else:
                 threshold = int(time.time()) - active_days * 86400
-                row = await conn.fetchrow("SELECT COUNT(*) FROM users WHERE last_active > $1", threshold)
-            return row[0] if row else 0
+                return await conn.fetchval("SELECT COUNT(*) FROM users WHERE last_active > $1", threshold)
     return await execute_with_retry(_get)
 
 async def set_user_agreed(user_id: int):
@@ -457,14 +405,20 @@ async def check_referral_bonus(user_id: int, bot):
         pool = await init_db_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT invited_by, friend_played FROM users WHERE user_id = $1",
+                "SELECT invited_by, friend_played FROM users WHERE user_id = $1 AND friend_played = 0",
                 user_id
             )
-            if row and row['invited_by'] is not None and row['friend_played'] == 0:
+            if row and row['invited_by'] is not None:
                 invited_by = row['invited_by']
-                await conn.execute("UPDATE users SET friend_played = 1 WHERE user_id = $1", user_id)
-                await conn.execute("UPDATE users SET balance = balance + 30 WHERE user_id = $1", user_id)
-                await conn.execute("UPDATE users SET balance = balance + 30 WHERE user_id = $1", invited_by)
+                await conn.execute(
+                    "UPDATE users SET friend_played = 1 WHERE user_id = $1",
+                    user_id
+                )
+                await conn.execute(
+                    "UPDATE users SET balance = balance + 30, bonus_total = bonus_total + 30, "
+                    "bonus_balance = bonus_balance + 30 WHERE user_id IN ($1, $2)",
+                    user_id, invited_by
+                )
                 try:
                     await bot.send_message(user_id, "🎉 Поздравляем! Вы сыграли первую игру и получили 30 бонусных баллов!")
                     await bot.send_message(invited_by, "🎉 Ваш друг сыграл первую игру! Вы получаете 30 бонусных баллов!")
@@ -710,11 +664,19 @@ async def update_crypto_transaction_status(payment_id: str, status: str, confirm
     async def _update():
         pool = await init_db_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE crypto_transactions SET status = $1, confirmed_at = $2 WHERE payment_id = $3",
-                status, confirmed_at or int(time.time()), payment_id
-            )
-    await execute_with_retry(_update)
+            if status == 'paid':
+                result = await conn.execute(
+                    "UPDATE crypto_transactions SET status = $1, confirmed_at = $2 WHERE payment_id = $3 AND status = 'pending'",
+                    status, confirmed_at or int(time.time()), payment_id
+                )
+                return result == "UPDATE 1"
+            else:
+                await conn.execute(
+                    "UPDATE crypto_transactions SET status = $1 WHERE payment_id = $2",
+                    status, payment_id
+                )
+                return True
+    return await execute_with_retry(_update)
 
 # ---- Заявки на вывод ----
 async def create_withdraw_request(user_id: int, amount_points: int, amount_usdt: float, wallet_address: str):
@@ -774,27 +736,20 @@ async def update_withdraw_request_status(request_id: int, status: str, completed
                 )
     await execute_with_retry(_update)
 
-    # ===== Статистика выводов и пополнений ===== 
+# ---- Статистика выводов и пополнений ----
 async def get_withdraw_stats() -> dict:
-    """Возвращает общую статистику по выводам."""
     async def _get():
         pool = await init_db_pool()
         async with pool.acquire() as conn:
-            # Общая статистика
             total_requests = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests")
             completed_requests = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'completed'")
             rejected_requests = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'rejected'")
             pending_requests = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'")
-            
-            # Сумма успешных выводов
             completed_amount = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE status = 'completed'") or 0
             completed_amount_usdt = await conn.fetchval("SELECT COALESCE(SUM(amount_usdt), 0) FROM withdraw_requests WHERE status = 'completed'") or 0
-            
-            # Среднее время обработки (только для успешных)
-            avg_processing_time = await conn.fetchval(
+            avg_time = await conn.fetchval(
                 "SELECT AVG(completed_at - created_at) / 3600.0 FROM withdraw_requests WHERE status = 'completed' AND completed_at IS NOT NULL"
             ) or 0
-            
         return {
             "total_requests": total_requests,
             "completed_requests": completed_requests,
@@ -803,28 +758,21 @@ async def get_withdraw_stats() -> dict:
             "completed_amount": completed_amount,
             "completed_amount_usdt": completed_amount_usdt,
             "completed_amount_rub": round(completed_amount_usdt * 90, 2),
-            "avg_processing_time": avg_processing_time
+            "avg_processing_time": avg_time
         }
     return await execute_with_retry(_get)
 
 async def get_deposit_stats() -> dict:
-    """Возвращает общую статистику по пополнениям."""
     async def _get():
         pool = await init_db_pool()
         async with pool.acquire() as conn:
-            # Общая статистика
             total_deposits = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions")
             successful = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'paid'")
             pending = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'pending'")
             failed = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'failed'")
-            
-            # Сумма пополнений
             total_amount = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'") or 0
-            
-            # Средний и максимальный чек
             avg_amount = await conn.fetchval("SELECT COALESCE(AVG(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'") or 0
             max_amount = await conn.fetchval("SELECT COALESCE(MAX(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'") or 0
-            
         return {
             "total_deposits": total_deposits,
             "successful": successful,
@@ -839,24 +787,17 @@ async def get_deposit_stats() -> dict:
     return await execute_with_retry(_get)
 
 async def get_user_withdraw_stats(user_id: int) -> dict:
-    """Возвращает статистику выводов для конкретного пользователя."""
     async def _get():
         pool = await init_db_pool()
         async with pool.acquire() as conn:
-            # Все заявки
-            total_requests = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1", user_id)
-            total_amount = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE user_id = $1", user_id) or 0
-            
-            # Успешные
-            completed = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'completed'", user_id)
+            count = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1", user_id) or 0
+            total = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE user_id = $1", user_id) or 0
+            completed = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'completed'", user_id) or 0
             completed_amount = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE user_id = $1 AND status = 'completed'", user_id) or 0
-            
-            # Ожидающие
-            pending = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'", user_id)
-            
+            pending = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'", user_id) or 0
         return {
-            "count": total_requests,
-            "total": total_amount,
+            "count": count,
+            "total": total,
             "completed": completed,
             "completed_amount": completed_amount,
             "pending": pending
@@ -864,22 +805,112 @@ async def get_user_withdraw_stats(user_id: int) -> dict:
     return await execute_with_retry(_get)
 
 async def get_user_deposit_stats(user_id: int) -> dict:
-    """Возвращает статистику пополнений для конкретного пользователя."""
     async def _get():
         pool = await init_db_pool()
         async with pool.acquire() as conn:
-            # Все пополнения
-            total_deposits = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id)
-            total_amount = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id) or 0
-            
-            # Средний и максимальный чек
-            avg_amount = await conn.fetchval("SELECT COALESCE(AVG(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id) or 0
-            max_amount = await conn.fetchval("SELECT COALESCE(MAX(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id) or 0
-            
+            count = await conn.fetchval("SELECT COUNT(*) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id) or 0
+            total = await conn.fetchval("SELECT COALESCE(SUM(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id) or 0
+            avg = await conn.fetchval("SELECT COALESCE(AVG(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id) or 0
+            max_val = await conn.fetchval("SELECT COALESCE(MAX(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id) or 0
         return {
-            "count": total_deposits,
-            "total": total_amount,
-            "avg": avg_amount,
-            "max": max_amount
+            "count": count,
+            "total": total,
+            "avg": avg,
+            "max": max_val
         }
+    return await execute_with_retry(_get)
+
+# ---- Демо-режим (добавленные функции) ----
+async def get_demo_games_played(user_id: int) -> int:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT demo_games_played FROM users WHERE user_id = $1", user_id)
+            return row[0] if row else 0
+    return await execute_with_retry(_get)
+
+async def increment_demo_games_played(user_id: int) -> bool:
+    async def _inc():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE users SET demo_games_played = demo_games_played + 1 WHERE user_id = $1 AND demo_games_played < $2",
+                user_id, 5
+            )
+            return result == "UPDATE 1"
+    return await execute_with_retry(_inc)
+
+async def reset_demo_games_played(user_id: int):
+    async def _reset():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute("UPDATE users SET demo_games_played = 0 WHERE user_id = $1", user_id)
+    await execute_with_retry(_reset)
+
+# ---- Защитные механизмы ----
+async def get_daily_withdrawn(user_id: int) -> int:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            today_start = int(time.time()) - (int(time.time()) % 86400)
+            row = await conn.fetchval(
+                "SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests "
+                "WHERE user_id = $1 AND status='completed' AND completed_at >= $2",
+                user_id, today_start
+            ) or 0
+            return row
+    return await execute_with_retry(_get)
+
+async def get_last_deposit_time(user_id: int) -> int:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchval("SELECT MAX(created_at) FROM deposits WHERE user_id = $1", user_id) or 0
+            return row
+    return await execute_with_retry(_get)
+
+async def get_pending_withdraw_count(user_id: int) -> int:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchval("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'", user_id) or 0
+            return row
+    return await execute_with_retry(_get)
+
+async def get_daily_total_withdrawn_rub() -> float:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            today_start = int(time.time()) - (int(time.time()) % 86400)
+            usdt_total = await conn.fetchval(
+                "SELECT COALESCE(SUM(amount_usdt), 0) FROM withdraw_requests "
+                "WHERE status='pending' AND created_at >= $1",
+                today_start
+            ) or 0
+            from config import USD_RATE
+            return usdt_total * USD_RATE
+    return await execute_with_retry(_get)
+
+async def update_bonus_wagered(user_id: int, bet_amount: int, win: bool):
+    async def _update():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET bonus_wagered = bonus_wagered + $1 WHERE user_id = $2",
+                bet_amount, user_id
+            )
+    await execute_with_retry(_update)
+
+async def get_bonus_wagering_status(user_id: int) -> Tuple[int, int, bool]:
+    async def _get():
+        pool = await init_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT bonus_balance, bonus_wagered FROM users WHERE user_id = $1", user_id)
+            if not row:
+                return 0, 0, True
+            bonus_balance, bonus_wagered = row
+            from config import BONUS_WAGER_MULTIPLIER
+            required_wagered = bonus_balance * BONUS_WAGER_MULTIPLIER
+            is_cleared = bonus_balance == 0 or bonus_wagered >= required_wagered
+            return bonus_balance, bonus_wagered, is_cleared
     return await execute_with_retry(_get)
