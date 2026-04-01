@@ -60,7 +60,6 @@ async def process_deposit(callback: types.CallbackQuery):
         if not invoice_response.get('ok'):
             raise Exception(f"Ошибка CryptoBot: {invoice_response}")
         invoice = invoice_response['result']
-        # Преобразуем invoice_id в строку (важно!)
         invoice_id = str(invoice.get('invoice_id'))
         pay_url = invoice.get('pay_url') or invoice.get('bot_invoice_url')
         if not pay_url:
@@ -128,7 +127,6 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         if not invoice_response.get('ok'):
             raise Exception(f"Ошибка CryptoBot: {invoice_response}")
         invoice = invoice_response['result']
-        # Преобразуем invoice_id в строку (важно!)
         invoice_id = str(invoice.get('invoice_id'))
         pay_url = invoice.get('pay_url') or invoice.get('bot_invoice_url')
         if not pay_url:
@@ -195,7 +193,6 @@ async def check_payment(callback: types.CallbackQuery):
             await update_crypto_transaction_status(payment_id, 'paid')
             await add_deposit(user_id, amount_points)
 
-            # Начисление реферального бонуса 15%
             await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
 
             await callback.message.edit_text(
