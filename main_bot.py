@@ -4,10 +4,11 @@ import logging
 import threading
 import os
 import time
-from flask import Flask, jsonify
+import json
+from flask import Flask, jsonify, request
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeDefault
+from aiogram.types import BotCommand, BotCommandScopeDefault, InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import MAIN_BOT_TOKEN
 from database import create_db
@@ -34,6 +35,85 @@ def health():
 @flask_app.route('/favicon.ico')
 def favicon():
     return '', 204
+
+# Webhook для CryptoBot
+@flask_app.route('/crypto_webhook', methods=['POST'])
+def crypto_webhook():
+    try:
+        data = request.json
+        logger.info(f"Webhook received: {data}")
+        
+        # Проверяем, что это уведомление об успешной оплате
+        if data and data.get('status') == 'paid':
+            payload = data.get('payload')
+            if payload:
+                # Запускаем асинхронную задачу для отправки сообщения пользователю
+                asyncio.run_coroutine_threadsafe(
+                    handle_successful_payment(payload),
+                    loop
+                )
+        
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.error(f"Error in webhook: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+async def handle_successful_payment(payment_id: str):
+    """Обрабатывает успешный платёж и отправляет пользователю кнопку возврата."""
+    import aiosqlite
+    from database import DB_NAME, get_user, update_balance, update_crypto_transaction_status, add_deposit
+    
+    try:
+        async with aiosqlite.connect(DB_NAME) as db:
+            # Находим пользователя по payment_id
+            cursor = await db.execute(
+                "SELECT user_id, amount_points, status FROM crypto_transactions WHERE payment_id = ?",
+                (payment_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                logger.error(f"Transaction not found for payment_id: {payment_id}")
+                return
+            
+            user_id, amount_points, status = row
+            if status == 'paid':
+                logger.info(f"Payment {payment_id} already processed")
+                return
+            
+            # Обновляем статус транзакции
+            await db.execute(
+                "UPDATE crypto_transactions SET status = 'paid', confirmed_at = ? WHERE payment_id = ?",
+                (int(time.time()), payment_id)
+            )
+            
+            # Начисляем баллы
+            balance, *_ = await get_user(user_id, None)
+            new_balance = balance + amount_points
+            await update_balance(user_id, new_balance)
+            await add_deposit(user_id, amount_points)
+            await db.commit()
+        
+        # Отправляем сообщение пользователю с кнопкой возврата
+        bot = Bot(token=MAIN_BOT_TOKEN)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
+        ])
+        await bot.send_message(
+            chat_id=user_id,
+            text=(
+                f"✅ <b>Оплата подтверждена!</b>\n\n"
+                f"💰 Начислено: {amount_points} баллов\n"
+                f"💎 Новый баланс: {new_balance} баллов\n\n"
+                f"Нажмите на кнопку ниже, чтобы вернуться в главное меню:"
+            ),
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
+        await bot.session.close()
+        logger.info(f"Payment {payment_id} processed successfully for user {user_id}")
+        
+    except Exception as e:
+        logger.error(f"Error processing payment {payment_id}: {e}")
 
 def run_flask():
     port = int(os.getenv('PORT', 10000))
@@ -86,6 +166,8 @@ async def on_startup():
     logger.info("База данных готова, команды установлены, бот запущен.")
 
 async def main():
+    global loop
+    loop = asyncio.get_event_loop()
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     await asyncio.sleep(2)

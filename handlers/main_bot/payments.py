@@ -27,7 +27,7 @@ async def deposit_callback(callback: types.CallbackQuery):
     await callback.message.edit_text(
         "💰 Выберите сумму пополнения.\n\n"
         "Оплата в криптовалюте USDT по текущему курсу.\n"
-        "После оплаты нажмите «Я оплатил» для зачисления баллов.",
+        "После оплаты баллы будут зачислены автоматически.",
         reply_markup=deposit_keyboard()
     )
 
@@ -71,9 +71,10 @@ async def process_deposit(callback: types.CallbackQuery):
             f"💳 Для пополнения на {amount_points} баллов ({amount_rub} руб) "
             f"перейдите по ссылке и оплатите {usdt_amount} USDT:\n\n"
             f"{pay_url}\n\n"
-            f"✅ После оплаты нажмите кнопку «Я оплатил» для проверки.",
+            f"✅ Баллы будут зачислены автоматически после оплаты.\n"
+            f"Если зачисление не произошло в течение 5 минут, нажмите кнопку ниже.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
+                [InlineKeyboardButton(text="✅ Я оплатил (проверить вручную)", callback_data=f"check_payment_{payment_id}")],
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
             ])
         )
@@ -95,7 +96,7 @@ async def deposit_custom_start(callback: types.CallbackQuery, state: FSMContext)
     await callback.message.edit_text(
         "💰 Введите желаемое количество баллов (целое число, минимум 10):\n\n"
         "Курс: 1.5 балла = 1 рубль.\n"
-        "После оплаты нажмите «Я оплатил» для зачисления.",
+        "После оплаты баллы будут зачислены автоматически.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Отмена", callback_data="deposit")]
         ])
@@ -139,9 +140,10 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
             f"💳 Для пополнения на {amount_points} баллов ({amount_rub} руб) "
             f"перейдите по ссылке и оплатите {usdt_amount} USDT:\n\n"
             f"{pay_url}\n\n"
-            f"✅ После оплаты нажмите кнопку «Я оплатил» для проверки.",
+            f"✅ Баллы будут зачислены автоматически после оплаты.\n"
+            f"Если зачисление не произошло в течение 5 минут, нажмите кнопку ниже.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
+                [InlineKeyboardButton(text="✅ Я оплатил (проверить вручную)", callback_data=f"check_payment_{payment_id}")],
                 [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
             ])
         )
@@ -149,7 +151,7 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка при создании платежа: {str(e)}")
         await state.clear()
 
-# --- Проверка оплаты ---
+# --- Проверка оплаты (ручная, запасной вариант) ---
 @router.callback_query(F.data.startswith("check_payment_"))
 async def check_payment(callback: types.CallbackQuery):
     try:
@@ -195,7 +197,6 @@ async def check_payment(callback: types.CallbackQuery):
 
             await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
 
-            # Создаём кнопку "Вернуться в меню"
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
             ])
