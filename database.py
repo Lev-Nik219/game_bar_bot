@@ -8,6 +8,9 @@ from typing import Optional, Tuple, List, Any, Dict
 # Получаем URL базы данных из переменных окружения Render
 DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://game_bar_db_user:Uc7EmLyrS86vR1gTIDeigkpJxSGY2iti@dpg-d6v7anea2pns73adhbhg-a/game_bar_db')
 
+# Для совместимости со старым кодом, где используется DB_NAME
+DB_NAME = "postgresql"  # Это не используется, но нужно для импорта
+
 # Глобальный пул соединений
 db_pool = None
 
