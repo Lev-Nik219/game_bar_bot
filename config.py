@@ -20,7 +20,7 @@ ADMIN_NAMES = {
 MAIN_BOT_USERNAME = "Game_Bar"
 
 # Константы для игр
-WIN_REDUCTION_FACTOR = 0.05
+WIN_REDUCTION_FACTOR = 0.025  # 2.5% выигрышей становятся проигрышами (было 0.05)
 
 # Курсы валют
 RUB_PER_BALL_RATE = 1.5
