@@ -4,18 +4,19 @@ import logging
 import threading
 import os
 import time
-import json
+import aiosqlite
 from flask import Flask, jsonify, request
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault, InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import MAIN_BOT_TOKEN
-from database import create_db
+from database import DB_NAME, create_db
 from handlers.main_bot import (
     games_router, profile_router, tournaments_router,
     payments_router, fallback_router, bot_info_router
 )
+from handlers.main_bot.cashback import router as cashback_router, process_cashback
 from middlewares import UserStatusMiddleware
 
 logging.basicConfig(level=logging.INFO)
@@ -38,15 +39,12 @@ def health():
 def favicon():
     return '', 204
 
-# Webhook для CryptoBot (принимает и GET, и POST)
 @flask_app.route('/crypto_webhook', methods=['GET', 'POST'])
 def crypto_webhook():
     if request.method == 'GET':
-        # Проверка webhook (CryptoBot отправляет GET при настройке)
         logger.info("Webhook check request received")
         return jsonify({"status": "ok"}), 200
     
-    # POST-запрос от CryptoBot (уведомление об оплате)
     try:
         data = request.json
         logger.info(f"Webhook received: {data}")
@@ -65,9 +63,8 @@ def crypto_webhook():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 async def handle_successful_payment(payment_id: str):
-    """Обрабатывает успешный платёж и отправляет пользователю кнопку возврата."""
     import aiosqlite
-    from database import DB_NAME, get_user, update_balance, update_crypto_transaction_status, add_deposit
+    from database import get_user, update_balance, update_crypto_transaction_status, add_deposit
     
     try:
         async with aiosqlite.connect(DB_NAME) as db:
@@ -94,7 +91,38 @@ async def handle_successful_payment(payment_id: str):
             new_balance = balance + amount_points
             await update_balance(user_id, new_balance)
             await add_deposit(user_id, amount_points)
+            
+            # Бонус за первый депозит
+            cursor = await db.execute(
+                "SELECT first_deposit_bonus_claimed FROM users WHERE user_id = ?",
+                (user_id,)
+            )
+            row2 = await cursor.fetchone()
+            first_deposit_claimed = row2[0] if row2 else 0
+            
+            if not first_deposit_claimed:
+                bonus_amount = int(amount_points * 0.5)
+                await db.execute(
+                    "UPDATE users SET balance = balance + ?, bonus_total = bonus_total + ?, "
+                    "bonus_balance = bonus_balance + ?, first_deposit_bonus_claimed = 1 WHERE user_id = ?",
+                    (bonus_amount, bonus_amount, bonus_amount, user_id)
+                )
+                new_balance += bonus_amount
+                
+                bot = Bot(token=MAIN_BOT_TOKEN)
+                await bot.send_message(
+                    user_id,
+                    f"🎁 <b>Бонус за первый депозит!</b>\n\n"
+                    f"Вы получили +50% бонусных баллов: {bonus_amount} баллов!\n\n"
+                    f"🎲 Отыграйте их с вейджером 3x, чтобы вывести.",
+                    parse_mode="HTML"
+                )
+                await bot.session.close()
+            
             await db.commit()
+        
+        from services.referral import award_referral_deposit_bonus
+        await award_referral_deposit_bonus(user_id, amount_points, None)
         
         bot = Bot(token=MAIN_BOT_TOKEN)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -133,6 +161,7 @@ dp.include_router(profile_router)
 dp.include_router(tournaments_router)
 dp.include_router(payments_router)
 dp.include_router(bot_info_router)
+dp.include_router(cashback_router)
 dp.include_router(fallback_router)
 
 @dp.errors()
@@ -157,15 +186,30 @@ async def global_error_handler(update: types.Update, exception: Exception):
         logger.error(f"Не удалось отправить сообщение об ошибке: {e}")
     return True
 
+async def check_cashback_periodically():
+    """Фоновая задача: проверка кэшбека каждый час."""
+    while True:
+        await asyncio.sleep(3600)  # каждый час
+        try:
+            async with aiosqlite.connect(DB_NAME) as db:
+                cursor = await db.execute("SELECT user_id FROM users")
+                users = await cursor.fetchall()
+                for (user_id,) in users:
+                    await process_cashback(user_id, bot)
+        except Exception as e:
+            logger.error(f"Ошибка в фоновой проверке кэшбека: {e}")
+
 async def on_startup():
     await create_db()
     commands = [
         BotCommand(command="start", description="Запустить бота"),
         BotCommand(command="myid", description="Мой Telegram ID"),
         BotCommand(command="cancel", description="Отменить текущее действие"),
+        BotCommand(command="cashback", description="Проверить кэшбек"),
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
     logger.info("База данных готова, команды установлены, бот запущен.")
+    asyncio.create_task(check_cashback_periodically())
 
 async def main():
     global loop
