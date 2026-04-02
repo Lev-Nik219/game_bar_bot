@@ -612,13 +612,15 @@ async def accept_agreement_callback(callback: types.CallbackQuery):
     username = callback.from_user.username
     first_name = callback.from_user.first_name
     
-    current_balance, *_ = await get_user(user_id, username)
-    new_balance = current_balance + 50
-    await update_balance(user_id, new_balance)
+    from database import execute_query
     
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("UPDATE users SET bonus_balance = bonus_balance + 50 WHERE user_id = ?", (user_id,))
-        await db.commit()
+    # Получаем текущий баланс
+    balance = await execute_query("SELECT balance FROM users WHERE user_id = $1", user_id, fetch_val=True)
+    if balance is None:
+        balance = 0
+    
+    new_balance = balance + 50
+    await execute_query("UPDATE users SET balance = $1, bonus_balance = bonus_balance + 50, bonus_total = bonus_total + 50 WHERE user_id = $2", new_balance, user_id)
     
     try:
         await log_agreement(user_id)
