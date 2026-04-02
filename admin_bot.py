@@ -4,12 +4,14 @@ import logging
 import threading
 import os
 import time
+import sys
 import aiosqlite
 import aiohttp
 from flask import Flask, jsonify
-from aiogram import Router, types, F, Bot
+from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
 
@@ -23,7 +25,7 @@ from database import (
     get_withdraw_stats, get_deposit_stats, get_user_withdraw_stats, get_user_deposit_stats,
     get_daily_withdrawn, get_last_deposit_time, get_pending_withdraw_count,
     get_daily_total_withdrawn_rub, update_bonus_wagered, get_bonus_wagering_status,
-    get_demo_games_played, increment_demo_games_played, reset_demo_games_played
+    get_demo_games_played, increment_demo_games_played, reset_demo_games_played, create_db
 )
 from keyboards import (
     admin_main_keyboard, admin_cancel_keyboard, admin_back_keyboard,
@@ -35,6 +37,7 @@ from states import (
     AdminStatsUserStates
 )
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 router = Router()
 
@@ -65,7 +68,7 @@ async def send_message_via_main_bot_silent(chat_id: int, text: str, parse_mode: 
 async def check_pending_withdrawals():
     """Периодическая проверка висящих заявок (каждые 10 минут)."""
     while True:
-        await asyncio.sleep(600)  # 10 минут
+        await asyncio.sleep(600)
         try:
             async with aiosqlite.connect(DB_NAME) as conn:
                 cursor = await conn.execute(
@@ -88,11 +91,28 @@ async def check_pending_withdrawals():
         except Exception as e:
             logger.error(f"Ошибка в фоновой проверке заявок: {e}")
 
-# Запускаем фоновую задачу при старте
-async def start_background_tasks():
-    asyncio.create_task(check_pending_withdrawals())
+# ===== Flask приложение =====
+flask_app = Flask(__name__)
 
-# ===== КОМАНДЫ ПОДТВЕРЖДЕНИЯ/ОТКЛОНЕНИЯ ЗАЯВОК (через команды) =====
+@flask_app.route('/')
+def home():
+    return jsonify({"status": "Admin bot is running", "time": time.time()})
+
+@flask_app.route('/health')
+def health():
+    return jsonify({"status": "ok"}), 200
+
+@flask_app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
+def run_flask():
+    """Запуск Flask сервера."""
+    port = int(os.environ.get('PORT', 10000))
+    from werkzeug.serving import run_simple
+    run_simple('0.0.0.0', port, flask_app, use_reloader=False, use_debugger=False)
+
+# ===== КОМАНДЫ ПОДТВЕРЖДЕНИЯ/ОТКЛОНЕНИЯ ЗАЯВОК =====
 @router.message(Command("confirm_withdraw"))
 async def confirm_withdraw_command(message: types.Message):
     user_id = message.from_user.id
@@ -129,7 +149,6 @@ async def confirm_withdraw_command(message: types.Message):
         )
         await conn.commit()
 
-    # Отправляем уведомление пользователю через основного бота
     await send_message_via_main_bot(
         target_user_id,
         f"✅ <b>Ваш запрос на вывод {amount_points} баллов подтверждён администратором!</b>\n\n"
@@ -178,7 +197,6 @@ async def reject_withdraw_command(message: types.Message):
         await conn.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount_points, target_user_id))
         await conn.commit()
 
-    # Отправляем уведомление пользователю через основного бота
     await send_message_via_main_bot(
         target_user_id,
         f"❌ <b>Ваш запрос на вывод {amount_points} баллов был отклонён администратором.</b>\n\n"
@@ -975,3 +993,33 @@ async def create_tournament_duration(message: types.Message, state: FSMContext):
         "👑 Панель администратора\n\nВыберите действие:",
         reply_markup=admin_main_keyboard()
     )
+
+# ===== ОСНОВНАЯ ФУНКЦИЯ =====
+async def main():
+    # Создаём таблицы БД
+    await create_db()
+    
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Даём Flask время на запуск
+    await asyncio.sleep(2)
+    
+    # Запускаем фоновые задачи
+    asyncio.create_task(check_pending_withdrawals())
+    
+    # Запускаем бота
+    bot = Bot(token=ADMIN_BOT_TOKEN)
+    
+    # Сбрасываем вебхук перед запуском polling
+    await bot.delete_webhook()
+    
+    dp = Dispatcher()
+    dp.include_router(router)
+    
+    # Запускаем polling
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())

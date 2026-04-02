@@ -4,3 +4,5 @@ aiosqlite==0.20.0
 flask==3.0.3
 crypto-pay-api-sdk
 python-dotenv==1.0.0
+aiohttp==3.9.0
+werkzeug==3.0.1
