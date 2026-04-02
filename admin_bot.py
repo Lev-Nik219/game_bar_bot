@@ -5,6 +5,7 @@ import threading
 import os
 import time
 import aiosqlite
+import aiohttp
 from flask import Flask, jsonify
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
@@ -40,7 +41,6 @@ router = Router()
 # ---- HTTP API для отправки сообщений через основного бота ----
 async def send_message_via_main_bot(chat_id: int, text: str, parse_mode: str = "HTML"):
     """Отправляет сообщение через основного бота, используя HTTP API."""
-    import aiohttp
     url = f"https://api.telegram.org/bot{MAIN_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
     try:
@@ -122,7 +122,6 @@ async def confirm_withdraw_command(message: types.Message):
             return
 
         target_user_id, amount_points, amount_usdt, contact = row
-        amount_rub = round(amount_points / 1.5, 2)  # Примерный курс
 
         await conn.execute(
             "UPDATE withdraw_requests SET status = 'completed', completed_at = ? WHERE id = ?",
@@ -140,7 +139,7 @@ async def confirm_withdraw_command(message: types.Message):
     await message.answer(
         f"✅ Заявка #{request_id} подтверждена.\n\n"
         f"👤 Пользователь: <code>{target_user_id}</code>\n"
-        f"💸 Сумма: {amount_points} баллов ≈ {amount_rub} руб\n"
+        f"💸 Сумма: {amount_points} баллов\n"
         f"📞 Контакт: {contact}\n\n"
         f"Пользователь уведомлён."
     )
