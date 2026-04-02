@@ -438,29 +438,29 @@ async def get_active_tournament() -> Optional[Tuple[int, str, int, int]]:
     async def _get():
         async with aiosqlite.connect(DB_NAME) as db:
             now = int(time.time())
-            # Ищем активные турниры
+            # Прямой поиск активных турниров
             cursor = await db.execute(
-                "SELECT id, name, prize_points, end_time FROM tournaments WHERE status='active' AND start_time <= ? AND end_time > ?",
+                "SELECT id, name, prize_points, end_time FROM tournaments WHERE status = 'active' AND start_time <= ? AND end_time > ?",
                 (now, now)
             )
             row = await cursor.fetchone()
             if row:
-                print(f"DEBUG: Найден активный турнир: {row}")
+                print(f"[DEBUG] Найден активный турнир: id={row[0]}, name={row[1]}, prize={row[2]}, end={row[3]}, now={now}")
                 return row
             
-            # Если нет активных, ищем турниры со статусом 'pending' и активируем их
+            # Если нет активных, проверяем турниры со статусом 'pending'
             cursor = await db.execute(
-                "SELECT id, name, prize_points, end_time, start_time FROM tournaments WHERE status='pending' AND start_time <= ?",
+                "SELECT id, name, prize_points, end_time FROM tournaments WHERE status = 'pending' AND start_time <= ?",
                 (now,)
             )
             row = await cursor.fetchone()
             if row:
-                print(f"DEBUG: Найден pending турнир, активируем: {row}")
-                await db.execute("UPDATE tournaments SET status='active' WHERE id=?", (row[0],))
+                print(f"[DEBUG] Найден pending турнир, активируем: id={row[0]}")
+                await db.execute("UPDATE tournaments SET status = 'active' WHERE id = ?", (row[0],))
                 await db.commit()
                 return (row[0], row[1], row[2], row[3])
             
-            print("DEBUG: Активных турниров нет")
+            print(f"[DEBUG] Активных турниров нет. now={now}")
             return None
     return await execute_with_retry(_get)
 
