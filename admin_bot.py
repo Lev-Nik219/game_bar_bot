@@ -4,7 +4,6 @@ import logging
 import threading
 import os
 import time
-import sys
 import aiosqlite
 import aiohttp
 from flask import Flask, jsonify
@@ -17,15 +16,15 @@ from datetime import datetime
 
 from config import ADMIN_BOT_TOKEN, ADMIN_IDS, ADMIN_NAMES, MAIN_BOT_TOKEN
 from database import (
-    DB_NAME, get_user, update_balance, get_user_stats,
+    get_user, update_balance, get_user_stats,
     get_all_users, get_users_count, get_bonus_total,
     create_withdraw_request, get_pending_withdraw_requests,
     get_all_withdraw_requests, count_withdraw_requests, update_withdraw_request_status,
-    create_crypto_transaction, get_crypto_transaction, update_crypto_transaction_status,
     get_withdraw_stats, get_deposit_stats, get_user_withdraw_stats, get_user_deposit_stats,
     get_daily_withdrawn, get_last_deposit_time, get_pending_withdraw_count,
-    get_daily_total_withdrawn_rub, update_bonus_wagered, get_bonus_wagering_status,
-    get_demo_games_played, increment_demo_games_played, reset_demo_games_played, create_db
+    update_bonus_wagered, get_bonus_wagering_status,
+    get_demo_games_played, increment_demo_games_played, reset_demo_games_played, create_db,
+    execute_query
 )
 from keyboards import (
     admin_main_keyboard, admin_cancel_keyboard, admin_back_keyboard,
@@ -70,7 +69,7 @@ async def check_pending_withdrawals():
     while True:
         await asyncio.sleep(600)
         try:
-            async with aiosqlite.connect(DB_NAME) as conn:
+            async with aiosqlite.connect("casino.db") as conn:
                 cursor = await conn.execute(
                     "SELECT id, user_id, amount_points, created_at FROM withdraw_requests WHERE status = 'pending' AND created_at < strftime('%s','now') - 86400"
                 )
@@ -112,6 +111,71 @@ def run_flask():
     from werkzeug.serving import run_simple
     run_simple('0.0.0.0', port, flask_app, use_reloader=False, use_debugger=False)
 
+# ===== ДИАГНОСТИЧЕСКИЕ КОМАНДЫ =====
+@router.message(Command("debug_tournament"))
+async def debug_tournament_admin(message: types.Message):
+    """Диагностическая команда для проверки турниров (админ-бот)"""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+    
+    now = int(time.time())
+    rows = await execute_query("SELECT id, name, prize_points, start_time, end_time, status FROM tournaments", fetch_all=True)
+    
+    if not rows:
+        await message.answer("❌ Нет турниров в БД")
+        return
+    
+    text = "🔍 Диагностика турниров (админ-бот):\n\n"
+    for row in rows:
+        tid, name, prize, start_time, end_time, status = row
+        start_str = datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M')
+        end_str = datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M')
+        now_str = datetime.fromtimestamp(now).strftime('%Y-%m-%d %H:%M')
+        is_active = status == 'active' and start_time <= now <= end_time
+        text += f"{'✅' if is_active else '❌'} ID: {tid}\n"
+        text += f"   Название: {name}\n"
+        text += f"   Приз: {prize}\n"
+        text += f"   Статус: {status}\n"
+        text += f"   Начало: {start_str}\n"
+        text += f"   Конец: {end_str}\n"
+        text += f"   Сейчас: {now_str}\n"
+        text += "\n"
+    
+    await message.answer(text)
+
+@router.message(Command("debug_withdrawals"))
+async def debug_withdrawals(message: types.Message):
+    """Проверка заявок на вывод"""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        await message.answer("❌ Нет доступа")
+        return
+    
+    rows = await execute_query(
+        "SELECT id, user_id, amount_points, amount_usdt, wallet_address, status, created_at FROM withdraw_requests ORDER BY created_at DESC",
+        fetch_all=True
+    )
+    
+    if not rows:
+        await message.answer("📭 Нет заявок на вывод в БД")
+        return
+    
+    text = "📋 Заявки на вывод:\n\n"
+    for row in rows:
+        req_id, uid, amount, usdt, wallet, status, created = row
+        created_str = datetime.fromtimestamp(created).strftime('%Y-%m-%d %H:%M')
+        text += f"ID: {req_id}\n"
+        text += f"Пользователь: {uid}\n"
+        text += f"Сумма: {amount} баллов ≈ {usdt} USDT\n"
+        text += f"Контакт: {wallet}\n"
+        text += f"Статус: {status}\n"
+        text += f"Создана: {created_str}\n"
+        text += "\n"
+    
+    await message.answer(text)
+
 # ===== КОМАНДЫ ПОДТВЕРЖДЕНИЯ/ОТКЛОНЕНИЯ ЗАЯВОК =====
 @router.message(Command("confirm_withdraw"))
 async def confirm_withdraw_command(message: types.Message):
@@ -131,7 +195,7 @@ async def confirm_withdraw_command(message: types.Message):
         await message.answer("❌ ID заявки должен быть числом.")
         return
 
-    async with aiosqlite.connect(DB_NAME) as conn:
+    async with aiosqlite.connect("casino.db") as conn:
         cursor = await conn.execute(
             "SELECT user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE id = ? AND status = 'pending'",
             (request_id,)
@@ -181,7 +245,7 @@ async def reject_withdraw_command(message: types.Message):
         await message.answer("❌ ID заявки должен быть числом.")
         return
 
-    async with aiosqlite.connect(DB_NAME) as conn:
+    async with aiosqlite.connect("casino.db") as conn:
         cursor = await conn.execute(
             "SELECT user_id, amount_points FROM withdraw_requests WHERE id = ? AND status = 'pending'",
             (request_id,)
@@ -221,40 +285,6 @@ async def cmd_start(message: types.Message):
         "👑 Панель администратора\n\nВыберите действие:",
         reply_markup=admin_main_keyboard()
     )
-
-@router.message(Command("check_tournaments"))
-async def check_tournaments(message: types.Message):
-    user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-    
-    async with aiosqlite.connect(DB_NAME) as conn:
-        # Проверяем все турниры
-        cursor = await conn.execute("SELECT id, name, prize_points, start_time, end_time, status FROM tournaments")
-        rows = await cursor.fetchall()
-        
-        if not rows:
-            await message.answer("❌ Нет турниров в базе данных")
-            return
-        
-        now = int(time.time())
-        text = "📋 Турниры в БД:\n\n"
-        for row in rows:
-            tid, name, prize, start_time, end_time, status = row
-            start_str = datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M')
-            end_str = datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M')
-            is_active = "✅" if (status == 'active' and start_time <= now <= end_time) else "❌"
-            text += f"{is_active} ID: {tid}\n"
-            text += f"   Название: {name}\n"
-            text += f"   Приз: {prize}\n"
-            text += f"   Статус: {status}\n"
-            text += f"   Начало: {start_str}\n"
-            text += f"   Конец: {end_str}\n"
-            text += f"   Текущее время: {datetime.fromtimestamp(now).strftime('%Y-%m-%d %H:%M')}\n"
-            text += "\n"
-        
-        await message.answer(text)
 
 @router.callback_query(F.data == "admin_cancel")
 async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
@@ -541,7 +571,7 @@ async def admin_stats_main_callback(callback: types.CallbackQuery):
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
 
-    async with aiosqlite.connect(DB_NAME) as conn:
+    async with aiosqlite.connect("casino.db") as conn:
         cursor = await conn.execute("SELECT COUNT(*) FROM users")
         total_users = (await cursor.fetchone())[0]
         
@@ -818,7 +848,7 @@ async def admin_confirm_withdraw(callback: types.CallbackQuery):
         await callback.answer("❌ Неверный формат данных", show_alert=True)
         return
 
-    async with aiosqlite.connect(DB_NAME) as conn:
+    async with aiosqlite.connect("casino.db") as conn:
         cursor = await conn.execute(
             "SELECT user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE id = ? AND status='pending'",
             (request_id,)
@@ -863,7 +893,7 @@ async def admin_reject_withdraw(callback: types.CallbackQuery):
         await callback.answer("❌ Неверный формат данных", show_alert=True)
         return
 
-    async with aiosqlite.connect(DB_NAME) as conn:
+    async with aiosqlite.connect("casino.db") as conn:
         cursor = await conn.execute(
             "SELECT user_id, amount_points FROM withdraw_requests WHERE id = ? AND status='pending'",
             (request_id,)
@@ -923,7 +953,7 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
 
     await message.answer("⏳ Начинаю рассылку...")
 
-    async with aiosqlite.connect(DB_NAME) as conn:
+    async with aiosqlite.connect("casino.db") as conn:
         cursor = await conn.execute("SELECT user_id FROM users")
         users = await cursor.fetchall()
 
@@ -1003,24 +1033,20 @@ async def create_tournament_duration(message: types.Message, state: FSMContext):
     name = data['name']
     prize = data['prize']
     now = int(time.time())
-    start_time = now  # Турнир начинается сейчас
     end_time = now + hours * 3600
     
-    async with aiosqlite.connect(DB_NAME) as conn:
-        await conn.execute(
-            "INSERT INTO tournaments (name, prize_points, start_time, end_time, status) VALUES (?, ?, ?, ?, 'active')",
-            (name, prize, start_time, end_time)
-        )
-        await conn.commit()
+    # Используем PostgreSQL для вставки
+    await execute_query(
+        "INSERT INTO tournaments (name, prize_points, start_time, end_time, status) VALUES ($1, $2, $3, $4, 'active')",
+        name, prize, now, end_time
+    )
     
     await send_message_via_main_bot_silent(
         1167503795,
         f"🏆 <b>Создан новый турнир!</b>\n\n"
         f"📌 <b>Название:</b> {name}\n"
         f"💰 <b>Приз:</b> {prize} баллов\n"
-        f"⏱️ <b>Длительность:</b> {hours} часов\n"
-        f"🕐 <b>Начало:</b> {datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M')}\n"
-        f"🕐 <b>Окончание:</b> {datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M')}\n\n"
+        f"⏱️ <b>Длительность:</b> {hours} часов\n\n"
         f"🎮 Турнир будет доступен в основном боте в разделе «Турниры»."
     )
     
