@@ -1,3 +1,5 @@
+# keyboards.py - полный исправленный файл
+
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
 def main_reply_keyboard() -> ReplyKeyboardMarkup:
@@ -64,6 +66,7 @@ def achievements_back_keyboard() -> InlineKeyboardMarkup:
     ])
 
 def deposit_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура пополнения с кнопкой 'Я оплатил'"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1000 баллов = 1000 руб (≈11.11 USDT)", callback_data="deposit_1000")],
         [InlineKeyboardButton(text="750 баллов = 750 руб (≈8.33 USDT)", callback_data="deposit_750")],
@@ -71,6 +74,13 @@ def deposit_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="250 баллов = 250 руб (≈2.78 USDT)", callback_data="deposit_250")],
         [InlineKeyboardButton(text="💰 Другая сумма", callback_data="deposit_custom")],
         [InlineKeyboardButton(text="🔙 Назад в профиль", callback_data="profile")]
+    ])
+
+# Новая клавиатура для подтверждения оплаты
+def payment_confirmation_keyboard(payment_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
     ])
 
 def back_to_menu_keyboard() -> InlineKeyboardMarkup:
@@ -161,7 +171,6 @@ def admin_bot_choice_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_cancel")]
     ])
 
-# Новая клавиатура для демо-меню (после неудачных попыток)
 def demo_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎮 Вернуться в демо‑меню", callback_data="demo_mode")],

@@ -939,5 +939,3 @@ async def get_bonus_wagering_status(user_id: int) -> Tuple[int, int, bool]:
             is_cleared = bonus_balance == 0 or bonus_wagered >= required_wagered
             return bonus_balance, bonus_wagered, is_cleared
     return await execute_with_retry(_get)
-
-get_daily_total_withdrawn_rub

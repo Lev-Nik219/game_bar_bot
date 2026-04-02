@@ -910,15 +910,18 @@ async def get_pending_withdraw_count(user_id: int) -> int:
     return await execute_with_retry(_get)
 
 async def get_daily_total_withdrawn_rub() -> float:
+    """Возвращает общую сумму выплат за сегодня (в рублях)."""
     async def _get():
         async with aiosqlite.connect(DB_NAME) as db:
             today_start = int(time.time()) - (int(time.time()) % 86400)
-            usdt_total = await db.execute_fetchone(
+            # ИСПРАВЛЕНО: используем execute и fetchone вместо execute_fetchone
+            cursor = await db.execute(
                 "SELECT COALESCE(SUM(amount_usdt), 0) FROM withdraw_requests "
                 "WHERE status='pending' AND created_at >= ?",
                 (today_start,)
             )
-            usdt_total = usdt_total[0] if usdt_total else 0
+            row = await cursor.fetchone()
+            usdt_total = row[0] if row else 0
             from config import USD_RATE
             return usdt_total * USD_RATE
     return await execute_with_retry(_get)

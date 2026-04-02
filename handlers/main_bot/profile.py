@@ -495,7 +495,7 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
 
     if withdrawals_count == 0:
         rate = FIRST_WITHDRAW_RATE
-        rate_text = "3.0"
+        rate_text = "2.0"
     else:
         rate = STANDARD_WITHDRAW_RATE
         rate_text = "1.5"
@@ -518,7 +518,7 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
     await create_withdraw_request(user_id, amount_points, amount_usdt, contact)
     await increment_withdrawals_count(user_id)
 
-    # Отправляем подтверждение пользователю
+    # УБИРАЕМ ДУБЛИРОВАНИЕ - ОСТАВЛЯЕМ ТОЛЬКО ОДИН БЛОК
     await message.answer(
         f"✅ <b>Ваша заявка на вывод принята!</b>\n\n"
         f"📋 <b>Детали заявки:</b>\n"
@@ -527,7 +527,7 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
         f"📞 Контакт: {contact}\n\n"
         f"⏳ Ожидайте подтверждения администратора.\n\n"
         f"ℹ️ <b>О курсе вывода:</b>\n"
-        f"• Это {'первый' if withdrawals_count == 0 else ''} вывод {'(курс 3.0)' if withdrawals_count == 0 else '(курс 1.5)'}\n"
+        f"• Это {'первый' if withdrawals_count == 0 else ''} вывод (курс {rate_text})\n"
         f"• Со {'второго' if withdrawals_count == 0 else 'следующего'} вывода курс станет 1.5 балла = 1 рубль\n\n"
         f"🔙 Нажмите кнопку ниже, чтобы вернуться в профиль.",
         parse_mode="HTML",
@@ -542,25 +542,6 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
         user_id, amount_points, amount_rub, amount_usdt, contact,
         username, message.bot, rate_text
     ))
-    
-    # Подтверждение пользователю
-    await message.answer(
-        f"✅ <b>Ваша заявка на вывод принята!</b>\n\n"
-        f"📋 <b>Детали заявки:</b>\n"
-        f"💸 Сумма: {amount_points} баллов\n"
-        f"💰 Вы получите: ≈ {amount_rub} руб ≈ {amount_usdt} USDT\n"
-        f"📞 Контакт: {contact}\n\n"
-        f"⏳ Ожидайте подтверждения администратора.\n\n"
-        f"ℹ️ <b>О курсе вывода:</b>\n"
-        f"• Это {'первый' if withdrawals_count == 1 else ''} вывод {'(курс 3.5)' if withdrawals_count == 1 else '(курс 2)'}\n"
-        f"• Со {'второго' if withdrawals_count == 1 else 'следующего'} вывода курс станет 2 балла = 1 рубль\n\n"
-        f"🔙 Нажмите кнопку ниже, чтобы вернуться в профиль.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")]
-        ])
-    )
-    await state.clear()
 
 async def notify_admins_about_limit_exceeded():
     try:
