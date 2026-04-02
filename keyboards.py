@@ -65,10 +65,10 @@ def achievements_back_keyboard() -> InlineKeyboardMarkup:
 
 def deposit_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1000 баллов ≈ 667 руб (≈7.41 USDT)", callback_data="deposit_1000")],
-        [InlineKeyboardButton(text="750 баллов ≈ 500 руб (≈5.56 USDT)", callback_data="deposit_750")],
-        [InlineKeyboardButton(text="500 баллов ≈ 333 руб (≈3.70 USDT)", callback_data="deposit_500")],
-        [InlineKeyboardButton(text="250 баллов ≈ 167 руб (≈1.86 USDT)", callback_data="deposit_250")],
+        [InlineKeyboardButton(text="1000 баллов = 1000 руб (≈11.11 USDT)", callback_data="deposit_1000")],
+        [InlineKeyboardButton(text="750 баллов = 750 руб (≈8.33 USDT)", callback_data="deposit_750")],
+        [InlineKeyboardButton(text="500 баллов = 500 руб (≈5.56 USDT)", callback_data="deposit_500")],
+        [InlineKeyboardButton(text="250 баллов = 250 руб (≈2.78 USDT)", callback_data="deposit_250")],
         [InlineKeyboardButton(text="💰 Другая сумма", callback_data="deposit_custom")],
         [InlineKeyboardButton(text="🔙 Назад в профиль", callback_data="profile")]
     ])

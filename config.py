@@ -23,9 +23,9 @@ MAIN_BOT_USERNAME = "Game_Bar"
 WIN_REDUCTION_FACTOR = 0.025  # 2.5% выигрышей становятся проигрышами (было 0.05)
 
 # Курсы валют
-RUB_PER_BALL_RATE = 1.5
-FIRST_WITHDRAW_RATE = 3.0      # первый вывод: 3 балла = 1 рубль
-STANDARD_WITHDRAW_RATE = 1.5   # последующие выводы: 1.5 балла = 1 рубль
+RUB_PER_BALL_RATE = 1.0          # 1 рубль = 1 балл (при пополнении)  <-- исправлено
+FIRST_WITHDRAW_RATE = 3.0        # первый вывод: 3 балла = 1 рубль
+STANDARD_WITHDRAW_RATE = 1.5     # последующие выводы: 1.5 балла = 1 рубль
 USD_RATE = 90
 
 # Пороги реферальных бонусов

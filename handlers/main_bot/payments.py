@@ -40,10 +40,10 @@ async def process_deposit(callback: types.CallbackQuery):
         logger.error(f"Ошибка в callback.answer (process_deposit): {e}")
 
     amount_map = {
-        "deposit_1000": (667, 1000),
-        "deposit_750": (500, 750),
-        "deposit_500": (333, 500),
-        "deposit_250": (167, 250)
+        "deposit_1000": (1000, 1000),   # 1000 руб = 1000 баллов
+        "deposit_750": (750, 750),
+        "deposit_500": (500, 500),
+        "deposit_250": (250, 250)
     }
     amount_rub, amount_points = amount_map[callback.data]
     user_id = callback.from_user.id
