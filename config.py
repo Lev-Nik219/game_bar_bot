@@ -24,15 +24,15 @@ WIN_REDUCTION_FACTOR = 0.05
 
 # Курсы валют
 RUB_PER_BALL_RATE = 1.5
-FIRST_WITHDRAW_RATE = 3.5
-STANDARD_WITHDRAW_RATE = 2.0
+FIRST_WITHDRAW_RATE = 3.0      # первый вывод: 3 балла = 1 рубль
+STANDARD_WITHDRAW_RATE = 1.5   # последующие выводы: 1.5 балла = 1 рубль
 USD_RATE = 90
 
 # Пороги реферальных бонусов
 REFERRAL_BONUS_THRESHOLDS = [1, 3, 5]
 
 # Защитные механизмы
-MIN_GAMES_BEFORE_WITHDRAW = 10
+MIN_GAMES_BEFORE_WITHDRAW = 5   # 5 игр перед выводом
 DAILY_WITHDRAW_LIMIT = 10000
 WITHDRAW_COOLDOWN_HOURS = 24
 BONUS_WAGER_MULTIPLIER = 3

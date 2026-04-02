@@ -24,7 +24,7 @@ class DartsStates(StatesGroup):
     waiting_for_bet = State()
     waiting_for_choice = State()
 
-# Демо-режим
+# Демо-состояния
 class DemoSlotStates(StatesGroup):
     waiting_for_bet = State()
 
@@ -32,6 +32,24 @@ class DemoDiceStates(StatesGroup):
     waiting_for_bet = State()
     waiting_for_choice = State()
 
+class DemoRouletteStates(StatesGroup):
+    waiting_for_bet = State()
+    waiting_for_choice = State()
+    waiting_for_number = State()
+
+class DemoBlackjackStates(StatesGroup):
+    waiting_for_bet = State()
+    in_game = State()
+
+class DemoBowlingStates(StatesGroup):
+    waiting_for_bet = State()
+    waiting_for_choice = State()
+
+class DemoDartsStates(StatesGroup):
+    waiting_for_bet = State()
+    waiting_for_choice = State()
+
+# Админ-состояния
 class AdminGiveStates(StatesGroup):
     waiting_for_target_id = State()
     waiting_for_amount = State()
@@ -67,9 +85,3 @@ class CustomDepositStates(StatesGroup):
 
 class AdminChatStates(StatesGroup):
     waiting_for_message = State()
-
-class DemoStates(StatesGroup):
-    balance = State()  # демо-баланс
-
-class DemoStates(StatesGroup):
-    waiting_for_action = State()

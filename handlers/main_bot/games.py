@@ -13,11 +13,12 @@ from database import (
 from keyboards import (
     games_menu_keyboard, back_to_menu_keyboard, roulette_choice_keyboard,
     blackjack_keyboard, bowling_choice_keyboard, darts_choice_keyboard,
-    main_reply_keyboard
+    main_reply_keyboard, demo_menu_keyboard
 )
 from states import (
     SlotStates, RouletteStates, DiceStates, BlackjackStates,
-    BowlingStates, DartsStates, DemoSlotStates, DemoDiceStates
+    BowlingStates, DartsStates, DemoSlotStates, DemoDiceStates,
+    DemoRouletteStates, DemoBlackjackStates, DemoBowlingStates, DemoDartsStates
 )
 from utils import adjust_win, cancel_on_max_attempts
 from config import WIN_REDUCTION_FACTOR, RUB_PER_BALL_RATE
@@ -30,6 +31,9 @@ from constants import DEMO_MAX_GAMES, DEMO_WELCOME
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+# ========== КОНСТАНТЫ ДЕМО-РЕЖИМА ==========
+DEMO_WIN_RATE = 75  # 75% вероятность выигрыша в демо-режиме (было 60%)
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def format_rub_equivalent(ball_amount: int) -> str:
@@ -72,6 +76,10 @@ async def demo_mode_start(callback: types.CallbackQuery, state: FSMContext):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎰 Слоты (демо)", callback_data="demo_slots")],
         [InlineKeyboardButton(text="🎲 Кости (демо)", callback_data="demo_dice")],
+        [InlineKeyboardButton(text="🎡 Рулетка (демо)", callback_data="demo_roulette")],
+        [InlineKeyboardButton(text="🃏 Блэкджек (демо)", callback_data="demo_blackjack")],
+        [InlineKeyboardButton(text="🎳 Боулинг (демо)", callback_data="demo_bowling")],
+        [InlineKeyboardButton(text="🎯 Дартс (демо)", callback_data="demo_darts")],
         [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
     ])
     await callback.message.answer(welcome_text, reply_markup=keyboard)
@@ -114,7 +122,6 @@ async def demo_slots_bet(message: types.Message, state: FSMContext):
     await state.update_data(bet_attempts=attempts)
 
     if attempts > 3:
-        from keyboards import demo_menu_keyboard
         await cancel_on_max_attempts(message, state, lambda uid: demo_menu_keyboard())
         return
 
@@ -188,8 +195,9 @@ async def demo_slots_play(message: types.Message, state: FSMContext, bet: int, f
     elif reel1 == reel2 or reel1 == reel3 or reel2 == reel3:
         win_multiplier = 1.5
 
+    # Демо-режим: 75% вероятность выигрыша
     demo_win_chance = random.randint(1, 100)
-    if win_multiplier > 0 and demo_win_chance <= 60:
+    if win_multiplier > 0 and demo_win_chance <= DEMO_WIN_RATE:
         winnings = int(bet * win_multiplier)
         win = True
     else:
@@ -264,7 +272,6 @@ async def demo_dice_bet(message: types.Message, state: FSMContext):
     await state.update_data(bet_attempts=attempts)
 
     if attempts > 3:
-        from keyboards import demo_menu_keyboard
         await cancel_on_max_attempts(message, state, lambda uid: demo_menu_keyboard())
         return
 
@@ -339,9 +346,9 @@ async def demo_dice_play(message: types.Message, state: FSMContext, bet: int, fi
 
     demo_win_chance = random.randint(1, 100)
     if choice == "over" and total > 7:
-        win = demo_win_chance <= 60
+        win = demo_win_chance <= DEMO_WIN_RATE
     elif choice == "under" and total < 7:
-        win = demo_win_chance <= 60
+        win = demo_win_chance <= DEMO_WIN_RATE
     else:
         win = False
 
@@ -377,6 +384,609 @@ async def demo_dice_play(message: types.Message, state: FSMContext, bet: int, fi
             [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
         ])
         await message.answer("🎮 Выберите действие:", reply_markup=keyboard)
+    await state.clear()
+
+# --- Демо-рулетка ---
+@router.callback_query(F.data == "demo_roulette")
+async def demo_roulette_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    user_id = callback.from_user.id
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await callback.message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        return
+    await state.set_state(DemoRouletteStates.waiting_for_bet)
+    await callback.message.edit_text(
+        f"🎡 **ДЕМО-РУЛЕТКА**\n\n"
+        f"🎲 Осталось игр: {DEMO_MAX_GAMES - played} из {DEMO_MAX_GAMES}\n\n"
+        "Введите сумму ставки (целое число, минимум 10, максимум 10000):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+        ])
+    )
+
+@router.message(DemoRouletteStates.waiting_for_bet)
+async def demo_roulette_bet(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    attempts = data.get("bet_attempts", 0) + 1
+    await state.update_data(bet_attempts=attempts)
+
+    if attempts > 3:
+        await cancel_on_max_attempts(message, state, lambda uid: demo_menu_keyboard())
+        return
+
+    try:
+        bet = int(message.text)
+        if bet < 10:
+            await message.answer(
+                f"❌ Минимальная ставка — 10 баллов.\n"
+                f"Пример: 100\n\nПопробуйте ещё раз (попытка {attempts}/3):",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+                ])
+            )
+            return
+        if bet > 10000:
+            await message.answer(
+                f"❌ Максимальная ставка — 10000 баллов.\n\n"
+                f"Попробуйте ещё раз (попытка {attempts}/3):",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+                ])
+            )
+            return
+    except ValueError:
+        await message.answer(
+            f"❌ Введите число. Пример: 100\n\n"
+            f"Попробуйте ещё раз (попытка {attempts}/3):",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+            ])
+        )
+        return
+
+    await state.update_data(bet=bet, bet_attempts=0)
+    await state.set_state(DemoRouletteStates.waiting_for_choice)
+    await message.answer("🎡 Выберите тип ставки:", reply_markup=roulette_choice_keyboard())
+
+@router.callback_query(DemoRouletteStates.waiting_for_choice, F.data.startswith("roulette_"))
+async def demo_roulette_choice(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    bet = data.get("bet")
+    user_id = callback.from_user.id
+    choice = callback.data
+
+    if choice == "roulette_specific":
+        await state.set_state(DemoRouletteStates.waiting_for_number)
+        await callback.message.edit_text(
+            "🎯 Введите число от 1 до 36:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+            ])
+        )
+        return
+
+    await state.update_data(roulette_choice=choice)
+    await demo_roulette_spin(callback.message, state, user_id, bet, choice, callback.from_user.first_name, callback.from_user.username, callback.bot)
+
+async def demo_roulette_spin(message: types.Message, state: FSMContext, user_id: int, bet: int, choice: str, first_name: str, username: str, bot, specific_number: int = None):
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        await state.clear()
+        return
+
+    await message.answer("🎡 **Кручу рулетку...**", parse_mode="HTML")
+    await asyncio.sleep(1)
+
+    number = random.randint(0, 36)
+    if number == 0:
+        color = "зеленое"
+        color_emoji = "🟢"
+    elif number in (1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36):
+        color = "красное"
+        color_emoji = "🔴"
+    else:
+        color = "черное"
+        color_emoji = "⚫"
+    parity = "четное" if number != 0 and number % 2 == 0 else "нечетное"
+
+    real_win_multiplier = 0
+    if choice == "roulette_color_red" and color == "красное":
+        real_win_multiplier = 2
+    elif choice == "roulette_color_black" and color == "черное":
+        real_win_multiplier = 2
+    elif choice == "roulette_color_green" and number == 0:
+        real_win_multiplier = 35
+    elif choice == "roulette_parity_even" and number != 0 and parity == "четное":
+        real_win_multiplier = 2
+    elif choice == "roulette_parity_odd" and number != 0 and parity == "нечетное":
+        real_win_multiplier = 2
+    elif choice == "roulette_specific" and specific_number is not None and number == specific_number:
+        real_win_multiplier = 35
+
+    demo_win_chance = random.randint(1, 100)
+    if real_win_multiplier > 0 and demo_win_chance <= DEMO_WIN_RATE:
+        winnings = int(bet * real_win_multiplier)
+        win = True
+    else:
+        winnings = 0
+        win = False
+
+    result_text = (
+        f"🎡 **ДЕМО-РЕЗУЛЬТАТ РУЛЕТКИ**\n\n"
+        f"<b>Выпало:</b> {number} {color_emoji} ({color})\n\n"
+        f"💰 Ставка: {bet} 💎\n"
+    )
+    if win:
+        result_text += f"🎉 **ВЫИГРЫШ: {winnings} 💎**\n"
+    else:
+        result_text += "😞 **ПРОИГРЫШ**\n"
+    result_text += f"\n🎲 Осталось игр: {DEMO_MAX_GAMES - played - 1} из {DEMO_MAX_GAMES}\n\n"
+    result_text += "⚠️ Демо-режим: выигрыши не начисляются на реальный баланс."
+
+    await message.answer(result_text, parse_mode="HTML")
+
+    await increment_demo_games_played(user_id)
+
+    new_played = played + 1
+    if new_played >= DEMO_MAX_GAMES:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ])
+        await message.answer("🎮 Демо-игры закончились. Примите соглашение, чтобы продолжить!", reply_markup=keyboard)
+    else:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎮 Вернуться в демо-меню", callback_data="demo_mode")],
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ])
+        await message.answer("🎮 Выберите действие:", reply_markup=keyboard)
+    await state.clear()
+
+@router.message(DemoRouletteStates.waiting_for_number)
+async def demo_roulette_number(message: types.Message, state: FSMContext):
+    try:
+        number = int(message.text)
+        if number < 1 or number > 36:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Введите целое число от 1 до 36:")
+        return
+
+    data = await state.get_data()
+    bet = data.get("bet")
+    user_id = message.from_user.id
+
+    await demo_roulette_spin(message, state, user_id, bet, "roulette_specific", message.from_user.first_name, message.from_user.username, message.bot, specific_number=number)
+
+# --- Демо-блэкджек ---
+@router.callback_query(F.data == "demo_blackjack")
+async def demo_blackjack_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    user_id = callback.from_user.id
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await callback.message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        return
+    await state.set_state(DemoBlackjackStates.waiting_for_bet)
+    await callback.message.edit_text(
+        f"🃏 **ДЕМО-БЛЭКДЖЕК**\n\n"
+        f"🎲 Осталось игр: {DEMO_MAX_GAMES - played} из {DEMO_MAX_GAMES}\n\n"
+        "Введите сумму ставки (целое число, минимум 10, максимум 10000):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+        ])
+    )
+
+@router.message(DemoBlackjackStates.waiting_for_bet)
+async def demo_blackjack_bet(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    attempts = data.get("bet_attempts", 0) + 1
+    await state.update_data(bet_attempts=attempts)
+
+    if attempts > 3:
+        await cancel_on_max_attempts(message, state, lambda uid: demo_menu_keyboard())
+        return
+
+    try:
+        bet = int(message.text)
+        if bet < 10:
+            await message.answer(
+                f"❌ Минимальная ставка — 10 баллов.\n"
+                f"Пример: 100\n\nПопробуйте ещё раз (попытка {attempts}/3):",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+                ])
+            )
+            return
+        if bet > 10000:
+            await message.answer(
+                f"❌ Максимальная ставка — 10000 баллов.\n\n"
+                f"Попробуйте ещё раз (попытка {attempts}/3):",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+                ])
+            )
+            return
+    except ValueError:
+        await message.answer(
+            f"❌ Введите число. Пример: 100\n\n"
+            f"Попробуйте ещё раз (попытка {attempts}/3):",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+            ])
+        )
+        return
+
+    await state.update_data(bet=bet, bet_attempts=0)
+    await demo_blackjack_play(message, state, bet, message.from_user.first_name, message.from_user.username, message.bot)
+
+async def demo_blackjack_play(message: types.Message, state: FSMContext, bet: int, first_name: str, username: str, bot):
+    user_id = message.from_user.id
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        await state.clear()
+        return
+
+    deck = [2,3,4,5,6,7,8,9,10,10,10,10,11] * 4
+    random.shuffle(deck)
+    player_hand = [deck.pop(), deck.pop()]
+    dealer_hand = [deck.pop()]
+    player_sum = sum(player_hand)
+    dealer_sum = sum(dealer_hand)
+
+    # Имитация хода игрока (добираем до 17)
+    while player_sum < 17 and len(player_hand) < 5:
+        new_card = deck.pop()
+        player_hand.append(new_card)
+        player_sum = sum(player_hand)
+        if player_sum > 21:
+            break
+
+    # Ход дилера
+    while dealer_sum < 17:
+        dealer_hand.append(deck.pop())
+        dealer_sum = sum(dealer_hand)
+
+    # Демо-режим: 75% победы
+    demo_win_chance = random.randint(1, 100)
+    if player_sum > 21:
+        win = False
+    elif dealer_sum > 21:
+        win = True
+    elif player_sum > dealer_sum:
+        win = demo_win_chance <= DEMO_WIN_RATE
+    elif player_sum < dealer_sum:
+        win = False
+    else:
+        win = True
+
+    winnings = int(bet * 2) if win else 0
+
+    result_text = (
+        f"🃏 **ДЕМО-РЕЗУЛЬТАТ БЛЭКДЖЕКА**\n\n"
+        f"Твои карты: {player_hand} (сумма: {player_sum})\n"
+        f"Карты дилера: {dealer_hand} (сумма: {dealer_sum})\n\n"
+        f"💰 Ставка: {bet} 💎\n"
+    )
+    if win:
+        result_text += f"🎉 **ВЫИГРЫШ: {winnings} 💎**\n"
+    else:
+        result_text += "😞 **ПРОИГРЫШ**\n"
+    result_text += f"\n🎲 Осталось игр: {DEMO_MAX_GAMES - played - 1} из {DEMO_MAX_GAMES}\n\n"
+    result_text += "⚠️ Демо-режим: выигрыши не начисляются на реальный баланс."
+
+    await message.answer(result_text, parse_mode="HTML")
+
+    await increment_demo_games_played(user_id)
+
+    new_played = played + 1
+    if new_played >= DEMO_MAX_GAMES:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ])
+        await message.answer("🎮 Демо-игры закончились. Примите соглашение, чтобы продолжить!", reply_markup=keyboard)
+    else:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎮 Вернуться в демо-меню", callback_data="demo_mode")],
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ])
+        await message.answer("🎮 Выберите действие:", reply_markup=keyboard)
+    await state.clear()
+
+# --- Демо-боулинг ---
+@router.callback_query(F.data == "demo_bowling")
+async def demo_bowling_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    user_id = callback.from_user.id
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await callback.message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        return
+    await state.set_state(DemoBowlingStates.waiting_for_bet)
+    await callback.message.edit_text(
+        f"🎳 **ДЕМО-БОУЛИНГ**\n\n"
+        f"🎲 Осталось игр: {DEMO_MAX_GAMES - played} из {DEMO_MAX_GAMES}\n\n"
+        "Введите сумму ставки (целое число, минимум 10, максимум 10000):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+        ])
+    )
+
+@router.message(DemoBowlingStates.waiting_for_bet)
+async def demo_bowling_bet(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    attempts = data.get("bet_attempts", 0) + 1
+    await state.update_data(bet_attempts=attempts)
+
+    if attempts > 3:
+        await cancel_on_max_attempts(message, state, lambda uid: demo_menu_keyboard())
+        return
+
+    try:
+        bet = int(message.text)
+        if bet < 10:
+            await message.answer(
+                f"❌ Минимальная ставка — 10 баллов.\n"
+                f"Пример: 100\n\nПопробуйте ещё раз (попытка {attempts}/3):",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+                ])
+            )
+            return
+        if bet > 10000:
+            await message.answer(
+                f"❌ Максимальная ставка — 10000 баллов.\n\n"
+                f"Попробуйте ещё раз (попытка {attempts}/3):",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+                ])
+            )
+            return
+    except ValueError:
+        await message.answer(
+            f"❌ Введите число. Пример: 100\n\n"
+            f"Попробуйте ещё раз (попытка {attempts}/3):",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+            ])
+        )
+        return
+
+    await state.update_data(bet=bet, bet_attempts=0)
+    await state.set_state(DemoBowlingStates.waiting_for_choice)
+    await message.answer("🎳 Сделайте ставку:", reply_markup=bowling_choice_keyboard())
+
+@router.callback_query(DemoBowlingStates.waiting_for_choice, F.data.in_(["bowling_over", "bowling_under"]))
+async def demo_bowling_choice(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    bet = data.get("bet")
+    user_id = callback.from_user.id
+    choice = callback.data
+
+    await callback.message.answer("🎳 **Кидаю шар...**", parse_mode="HTML")
+    await asyncio.sleep(1)
+    dice_message = await callback.message.answer_dice(emoji="🎳")
+    await asyncio.sleep(2)
+
+    value = dice_message.dice.value
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await callback.message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        await state.clear()
+        return
+
+    # Демо-режим: 75% выигрыша
+    demo_win_chance = random.randint(1, 100)
+    win = demo_win_chance <= DEMO_WIN_RATE
+    winnings = int(bet * 2) if win else 0
+
+    result_text = (
+        f"🎳 **ДЕМО-РЕЗУЛЬТАТ БОУЛИНГА**\n\n"
+        f"<b>Результат броска:</b> {value}\n\n"
+        f"💰 Ставка: {bet} 💎\n"
+    )
+    if win:
+        result_text += f"🎉 **ВЫИГРЫШ: {winnings} 💎**\n"
+    else:
+        result_text += "😞 **ПРОИГРЫШ**\n"
+    result_text += f"\n🎲 Осталось игр: {DEMO_MAX_GAMES - played - 1} из {DEMO_MAX_GAMES}\n\n"
+    result_text += "⚠️ Демо-режим: выигрыши не начисляются на реальный баланс."
+
+    await callback.message.answer(result_text, parse_mode="HTML")
+
+    await increment_demo_games_played(user_id)
+
+    new_played = played + 1
+    if new_played >= DEMO_MAX_GAMES:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ])
+        await callback.message.answer("🎮 Демо-игры закончились. Примите соглашение, чтобы продолжить!", reply_markup=keyboard)
+    else:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎮 Вернуться в демо-меню", callback_data="demo_mode")],
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ])
+        await callback.message.answer("🎮 Выберите действие:", reply_markup=keyboard)
+    await state.clear()
+
+# --- Демо-дартс ---
+@router.callback_query(F.data == "demo_darts")
+async def demo_darts_start(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    user_id = callback.from_user.id
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await callback.message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        return
+    await state.set_state(DemoDartsStates.waiting_for_bet)
+    await callback.message.edit_text(
+        f"🎯 **ДЕМО-ДАРТС**\n\n"
+        f"🎲 Осталось игр: {DEMO_MAX_GAMES - played} из {DEMO_MAX_GAMES}\n\n"
+        "Введите сумму ставки (целое число, минимум 10, максимум 10000):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+        ])
+    )
+
+@router.message(DemoDartsStates.waiting_for_bet)
+async def demo_darts_bet(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        await state.clear()
+        return
+
+    data = await state.get_data()
+    attempts = data.get("bet_attempts", 0) + 1
+    await state.update_data(bet_attempts=attempts)
+
+    if attempts > 3:
+        await cancel_on_max_attempts(message, state, lambda uid: demo_menu_keyboard())
+        return
+
+    try:
+        bet = int(message.text)
+        if bet < 10:
+            await message.answer(
+                f"❌ Минимальная ставка — 10 баллов.\n"
+                f"Пример: 100\n\nПопробуйте ещё раз (попытка {attempts}/3):",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+                ])
+            )
+            return
+        if bet > 10000:
+            await message.answer(
+                f"❌ Максимальная ставка — 10000 баллов.\n\n"
+                f"Попробуйте ещё раз (попытка {attempts}/3):",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+                ])
+            )
+            return
+    except ValueError:
+        await message.answer(
+            f"❌ Введите число. Пример: 100\n\n"
+            f"Попробуйте ещё раз (попытка {attempts}/3):",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Отмена", callback_data="demo_mode")]
+            ])
+        )
+        return
+
+    await state.update_data(bet=bet, bet_attempts=0)
+    await state.set_state(DemoDartsStates.waiting_for_choice)
+    await message.answer("🎯 Сделайте ставку (чёт/нечет):", reply_markup=darts_choice_keyboard())
+
+@router.callback_query(DemoDartsStates.waiting_for_choice, F.data.in_(["darts_even", "darts_odd"]))
+async def demo_darts_choice(callback: types.CallbackQuery, state: FSMContext):
+    await callback.answer()
+    data = await state.get_data()
+    bet = data.get("bet")
+    user_id = callback.from_user.id
+    choice = callback.data
+
+    await callback.message.answer("🎯 **Кидаю дротик...**", parse_mode="HTML")
+    await asyncio.sleep(1)
+    dice_message = await callback.message.answer_dice(emoji="🎯")
+    await asyncio.sleep(2)
+
+    value = dice_message.dice.value
+    is_even = value % 2 == 0
+    played = await get_demo_games_played(user_id)
+    if played >= DEMO_MAX_GAMES:
+        await callback.message.answer("❌ Демо-режим исчерпан. Примите соглашение.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ]))
+        await state.clear()
+        return
+
+    # Демо-режим: 75% выигрыша
+    demo_win_chance = random.randint(1, 100)
+    win = demo_win_chance <= DEMO_WIN_RATE
+    winnings = int(bet * 2) if win else 0
+
+    result_text = (
+        f"🎯 **ДЕМО-РЕЗУЛЬТАТ ДАРТС**\n\n"
+        f"<b>Результат броска:</b> {value} {'(чётное)' if is_even else '(нечётное)'}\n\n"
+        f"💰 Ставка: {bet} 💎\n"
+    )
+    if win:
+        result_text += f"🎉 **ВЫИГРЫШ: {winnings} 💎**\n"
+    else:
+        result_text += "😞 **ПРОИГРЫШ**\n"
+    result_text += f"\n🎲 Осталось игр: {DEMO_MAX_GAMES - played - 1} из {DEMO_MAX_GAMES}\n\n"
+    result_text += "⚠️ Демо-режим: выигрыши не начисляются на реальный баланс."
+
+    await callback.message.answer(result_text, parse_mode="HTML")
+
+    await increment_demo_games_played(user_id)
+
+    new_played = played + 1
+    if new_played >= DEMO_MAX_GAMES:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ])
+        await callback.message.answer("🎮 Демо-игры закончились. Примите соглашение, чтобы продолжить!", reply_markup=keyboard)
+    else:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎮 Вернуться в демо-меню", callback_data="demo_mode")],
+            [InlineKeyboardButton(text="✅ Принять соглашение", callback_data="accept_agreement")]
+        ])
+        await callback.message.answer("🎮 Выберите действие:", reply_markup=keyboard)
     await state.clear()
 
 # ========== РЕАЛЬНЫЕ ИГРЫ ==========
@@ -579,7 +1189,7 @@ async def spin_roulette(message: types.Message, state: FSMContext, user_id: int,
                         balance: int, bet: int, choice: str, first_name: str, bot,
                         specific_number: int = None):
     await message.answer("🎡 **Кручу рулетку...**", parse_mode="HTML")
-    await asyncio.sleep(2)
+    await asyncio.sleep(1)
 
     number = random.randint(0, 36)
     if number == 0:
@@ -1022,9 +1632,9 @@ async def bowling_choice(callback: types.CallbackQuery, state: FSMContext):
     choice = callback.data
 
     await callback.message.answer("🎳 **Кидаю шар...**", parse_mode="HTML")
-    await asyncio.sleep(2)
+    await asyncio.sleep(1)
     dice_message = await callback.message.answer_dice(emoji="🎳")
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
 
     value = dice_message.dice.value
     win = (choice == "bowling_over" and value > 3) or (choice == "bowling_under" and value < 4)
@@ -1126,9 +1736,9 @@ async def darts_choice(callback: types.CallbackQuery, state: FSMContext):
     choice = callback.data
 
     await callback.message.answer("🎯 **Кидаю дротик...**", parse_mode="HTML")
-    await asyncio.sleep(2)
+    await asyncio.sleep(1)
     dice_message = await callback.message.answer_dice(emoji="🎯")
-    await asyncio.sleep(3)
+    await asyncio.sleep(2)
 
     value = dice_message.dice.value
     is_even = value % 2 == 0
