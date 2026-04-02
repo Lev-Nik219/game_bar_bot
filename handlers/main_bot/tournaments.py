@@ -1,17 +1,49 @@
 import time
+import datetime
 import aiogram.exceptions
 from aiogram import Router, types, F
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database import (
     get_active_tournament, get_tournament_leaders,
     register_for_tournament, is_registered_for_tournament,
     get_user_tournaments, count_user_tournaments,
-    finish_tournament
+    finish_tournament, DB_NAME
 )
-from .common import get_game_over_text_and_keyboard
+import aiosqlite
 
 router = Router()
+
+@router.message(Command("debug_tournament"))
+async def debug_tournament(message: types.Message):
+    """Диагностическая команда для проверки турниров"""
+    user_id = message.from_user.id
+    now = int(time.time())
+    
+    async with aiosqlite.connect(DB_NAME) as db:
+        cursor = await db.execute("SELECT id, name, prize_points, start_time, end_time, status FROM tournaments")
+        rows = await cursor.fetchall()
+        
+        if not rows:
+            await message.answer("❌ Нет турниров в БД")
+            return
+        
+        text = "🔍 Диагностика турниров:\n\n"
+        for row in rows:
+            tid, name, prize, start_time, end_time, status = row
+            text += f"ID: {tid}\n"
+            text += f"Название: {name}\n"
+            text += f"Статус: {status}\n"
+            text += f"start_time: {start_time} ({datetime.datetime.fromtimestamp(start_time)})\n"
+            text += f"end_time: {end_time} ({datetime.datetime.fromtimestamp(end_time)})\n"
+            text += f"now: {now} ({datetime.datetime.fromtimestamp(now)})\n"
+            text += f"Условие active: {status == 'active' and start_time <= now <= end_time}\n"
+            text += "\n"
+        
+        await message.answer(text)
+
+# ===== ОСНОВНЫЕ ФУНКЦИИ ТУРНИРОВ =====
 
 async def get_tournament_message(user_id: int, bot) -> tuple[str, InlineKeyboardMarkup]:
     """Возвращает текст и клавиатуру для активного турнира."""

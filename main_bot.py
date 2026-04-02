@@ -206,6 +206,7 @@ async def on_startup():
         BotCommand(command="myid", description="Мой Telegram ID"),
         BotCommand(command="cancel", description="Отменить текущее действие"),
         BotCommand(command="cashback", description="Проверить кэшбек"),
+        BotCommand(command="debug_tournament", description="Диагностика турниров"),  # <--- ДОБАВИТЬ ЭТУ СТРОКУ
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
     logger.info("База данных готова, команды установлены, бот запущен.")
