@@ -258,6 +258,29 @@ async def get_bonus_total(user_id: int) -> int:
             return row[0] if row else 0
     return await execute_with_retry(_get)
 
+async def claim_daily_bonus(user_id: int) -> Tuple[bool, int]:
+    async def _claim():
+        async with aiosqlite.connect(DB_NAME) as db:
+            now = int(time.time())
+            today_start = now - (now % 86400)
+            cursor = await db.execute(
+                "UPDATE users SET balance = balance + 20, bonus_total = bonus_total + 20, "
+                "bonus_balance = bonus_balance + 20, "
+                "daily_bonus_last = ?, daily_bonus_streak = daily_bonus_streak + 1 "
+                "WHERE user_id = ? AND daily_bonus_last < ?",
+                (now, user_id, today_start)
+            )
+            if cursor.rowcount > 0:
+                cursor2 = await db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+                new_balance = (await cursor2.fetchone())[0]
+                await db.commit()
+                return True, new_balance
+            else:
+                cursor2 = await db.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+                balance = (await cursor2.fetchone())[0]
+                return False, balance
+    return await execute_with_retry(_claim)
+
 async def update_balance(user_id: int, new_balance: int):
     async def _update():
         async with aiosqlite.connect(DB_NAME) as db:
