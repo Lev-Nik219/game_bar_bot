@@ -9,49 +9,85 @@ from database import (
     get_active_tournament, get_tournament_leaders,
     register_for_tournament, is_registered_for_tournament,
     get_user_tournaments, count_user_tournaments,
-    finish_tournament, DB_NAME
+    finish_tournament, execute_query
 )
-import aiosqlite
+from .common import get_game_over_text_and_keyboard
+from config import ADMIN_IDS
 
 router = Router()
 
+# ===== ДИАГНОСТИЧЕСКАЯ КОМАНДА =====
 @router.message(Command("debug_tournament"))
 async def debug_tournament(message: types.Message):
     """Диагностическая команда для проверки турниров"""
     user_id = message.from_user.id
-    now = int(time.time())
+    if user_id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
     
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT id, name, prize_points, start_time, end_time, status FROM tournaments")
-        rows = await cursor.fetchall()
-        
-        if not rows:
-            await message.answer("❌ Нет турниров в БД")
-            return
-        
-        text = "🔍 Диагностика турниров:\n\n"
-        for row in rows:
-            tid, name, prize, start_time, end_time, status = row
-            text += f"ID: {tid}\n"
-            text += f"Название: {name}\n"
-            text += f"Статус: {status}\n"
-            text += f"start_time: {start_time} ({datetime.datetime.fromtimestamp(start_time)})\n"
-            text += f"end_time: {end_time} ({datetime.datetime.fromtimestamp(end_time)})\n"
-            text += f"now: {now} ({datetime.datetime.fromtimestamp(now)})\n"
-            text += f"Условие active: {status == 'active' and start_time <= now <= end_time}\n"
-            text += "\n"
-        
-        await message.answer(text)
+    now = int(time.time())
+    rows = await execute_query("SELECT id, name, prize_points, start_time, end_time, status FROM tournaments", fetch_all=True)
+    
+    if not rows:
+        await message.answer("❌ Нет турниров в БД")
+        return
+    
+    text = "🔍 Диагностика турниров:\n\n"
+    for row in rows:
+        tid, name, prize, start_time, end_time, status = row
+        start_str = datetime.datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M')
+        end_str = datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M')
+        now_str = datetime.datetime.fromtimestamp(now).strftime('%Y-%m-%d %H:%M')
+        is_active = status == 'active' and start_time <= now <= end_time
+        text += f"{'✅' if is_active else '❌'} ID: {tid}\n"
+        text += f"   Название: {name}\n"
+        text += f"   Приз: {prize}\n"
+        text += f"   Статус: {status}\n"
+        text += f"   Начало: {start_str}\n"
+        text += f"   Конец: {end_str}\n"
+        text += f"   Сейчас: {now_str}\n"
+        text += f"   Активен: {is_active}\n"
+        text += "\n"
+    
+    await message.answer(text)
+
+# ===== КОМАНДА ДЛЯ СОЗДАНИЯ ТУРНИРА =====
+@router.message(Command("create_tournament"))
+async def create_tournament_cmd(message: types.Message):
+    """Создаёт турнир (только для админов)"""
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        await message.answer("❌ Нет доступа")
+        return
+    
+    args = message.text.split()
+    if len(args) < 4:
+        await message.answer("❌ Использование: /create_tournament <название> <приз> <часы>\nПример: /create_tournament Супертурнир 1000 24")
+        return
+    
+    name = args[1]
+    try:
+        prize = int(args[2])
+        hours = int(args[3])
+    except:
+        await message.answer("❌ Приз и часы должны быть числами")
+        return
+    
+    now = int(time.time())
+    end_time = now + hours * 3600
+    
+    await execute_query(
+        "INSERT INTO tournaments (name, prize_points, start_time, end_time, status) VALUES ($1, $2, $3, $4, 'active')",
+        name, prize, now, end_time
+    )
+    
+    await message.answer(f"✅ Турнир «{name}» создан!\n💰 Приз: {prize} баллов\n⏱️ Длительность: {hours} часов")
 
 # ===== ОСНОВНЫЕ ФУНКЦИИ ТУРНИРОВ =====
-
 async def get_tournament_message(user_id: int, bot) -> tuple[str, InlineKeyboardMarkup]:
     """Возвращает текст и клавиатуру для активного турнира."""
     tournament_data = await get_active_tournament()
-    
-    # Отладочный вывод (временно)
-    print(f"DEBUG: tournament_data = {tournament_data}")
-    
+
     if not tournament_data:
         text = "🏆 Сейчас нет активных турниров."
         buttons = [
@@ -62,12 +98,9 @@ async def get_tournament_message(user_id: int, bot) -> tuple[str, InlineKeyboard
         return text, keyboard
 
     tournament_id, name, prize, end_time = tournament_data
-    print(f"DEBUG: Турнир найден - id={tournament_id}, name={name}, prize={prize}, end_time={end_time}")
-    
-    # Проверяем, не истекло ли время
     current_time = int(time.time())
+    
     if current_time > end_time:
-        print(f"DEBUG: Турнир истек, завершаем")
         await finish_tournament(tournament_id, bot)
         return await get_tournament_message(user_id, bot)
 
@@ -75,7 +108,7 @@ async def get_tournament_message(user_id: int, bot) -> tuple[str, InlineKeyboard
     registered = await is_registered_for_tournament(user_id, tournament_id)
 
     text = f"🏆 Активный турнир: {name}\nПриз: {prize} 💎\n"
-    time_left = end_time - int(time.time())
+    time_left = end_time - current_time
     hours = time_left // 3600
     minutes = (time_left % 3600) // 60
     text += f"⏳ Осталось: {hours} ч {minutes} мин\n\n"
@@ -122,7 +155,6 @@ async def tournament_join(callback: types.CallbackQuery):
     await register_for_tournament(user_id, tournament_id)
     await callback.answer("✅ Вы успешно зарегистрированы в турнире!", show_alert=True)
 
-    # Обновляем текущее сообщение
     new_text, new_keyboard = await get_tournament_message(user_id, callback.bot)
     try:
         await callback.message.edit_text(new_text, reply_markup=new_keyboard)
