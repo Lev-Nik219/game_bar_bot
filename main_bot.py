@@ -21,7 +21,6 @@ from middlewares import UserStatusMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Глобальный цикл событий для запуска корутин из Flask
 loop = None
 
 # ---------- Flask ----------
@@ -39,18 +38,22 @@ def health():
 def favicon():
     return '', 204
 
-# Webhook для CryptoBot
-@flask_app.route('/crypto_webhook', methods=['POST'])
+# Webhook для CryptoBot (принимает и GET, и POST)
+@flask_app.route('/crypto_webhook', methods=['GET', 'POST'])
 def crypto_webhook():
+    if request.method == 'GET':
+        # Проверка webhook (CryptoBot отправляет GET при настройке)
+        logger.info("Webhook check request received")
+        return jsonify({"status": "ok"}), 200
+    
+    # POST-запрос от CryptoBot (уведомление об оплате)
     try:
         data = request.json
         logger.info(f"Webhook received: {data}")
         
-        # Проверяем, что это уведомление об успешной оплате
         if data and data.get('status') == 'paid':
             payload = data.get('payload')
             if payload:
-                # Запускаем асинхронную задачу для отправки сообщения пользователю
                 asyncio.run_coroutine_threadsafe(
                     handle_successful_payment(payload),
                     loop
@@ -68,7 +71,6 @@ async def handle_successful_payment(payment_id: str):
     
     try:
         async with aiosqlite.connect(DB_NAME) as db:
-            # Находим пользователя по payment_id
             cursor = await db.execute(
                 "SELECT user_id, amount_points, status FROM crypto_transactions WHERE payment_id = ?",
                 (payment_id,)
@@ -83,20 +85,17 @@ async def handle_successful_payment(payment_id: str):
                 logger.info(f"Payment {payment_id} already processed")
                 return
             
-            # Обновляем статус транзакции
             await db.execute(
                 "UPDATE crypto_transactions SET status = 'paid', confirmed_at = ? WHERE payment_id = ?",
                 (int(time.time()), payment_id)
             )
             
-            # Начисляем баллы
             balance, *_ = await get_user(user_id, None)
             new_balance = balance + amount_points
             await update_balance(user_id, new_balance)
             await add_deposit(user_id, amount_points)
             await db.commit()
         
-        # Отправляем сообщение пользователю с кнопкой возврата
         bot = Bot(token=MAIN_BOT_TOKEN)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
