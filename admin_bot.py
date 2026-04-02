@@ -222,6 +222,25 @@ async def cmd_start(message: types.Message):
         reply_markup=admin_main_keyboard()
     )
 
+    @router.message(Command("check_tournaments"))
+    async def check_tournaments(message: types.Message):
+        """Временная команда для проверки турниров в БД"""
+        user_id = message.from_user.id
+        if user_id not in ADMIN_IDS:
+            await message.answer("❌ У вас нет доступа к этой команде.")
+            return
+        
+        async with aiosqlite.connect(DB_NAME) as conn:
+            cursor = await conn.execute("SELECT id, name, prize_points, start_time, end_time, status FROM tournaments")
+            rows = await cursor.fetchall()
+            if rows:
+                text = "📋 Найденные турниры:\n\n"
+                for row in rows:
+                    text += f"ID: {row[0]}, Название: {row[1]}, Приз: {row[2]}, Статус: {row[5]}\n"
+                await message.answer(text)
+            else:
+                await message.answer("❌ Нет турниров в базе данных")
+
 @router.callback_query(F.data == "admin_cancel")
 async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()

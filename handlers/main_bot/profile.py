@@ -567,9 +567,9 @@ async def notify_admins_about_withdraw(
 ):
     try:
         admin_bot = Bot(token=ADMIN_BOT_TOKEN)
+        user_link = f"tg://user?id={user_id}"
         for admin_id in ADMIN_IDS:
             try:
-                user_link = f"tg://user?id={user_id}"
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
                         text="✅ Подтвердить вывод",
@@ -583,9 +583,12 @@ async def notify_admins_about_withdraw(
                 await admin_bot.send_message(
                     admin_id,
                     f"🔔 <b>Новая заявка на вывод!</b>\n"
-                    f"👤 Пользователь: <a href='{user_link}'>{username} (ID: {user_id})</a>\n"
+                    f"👤 Пользователь: <a href='{user_link}'>{username if username else 'пользователь'}</a> (ID: {user_id})\n"
                     f"📞 Контакт: {contact}\n"
-                    f"💸 Сумма: {amount_points} баллов = {amount_rub} руб (курс {rate_text}) ≈ {amount_usdt} USDT",
+                    f"💸 Сумма: {amount_points} баллов = {amount_rub} руб (курс {rate_text}) ≈ {amount_usdt} USDT\n\n"
+                    f"💡 Для отправки средств используйте команду:\n"
+                    f"<code>/send {amount_usdt} USDT</code>\n\n"
+                    f"Или нажмите на кнопку ниже:",
                     parse_mode="HTML",
                     reply_markup=keyboard
                 )
@@ -593,7 +596,7 @@ async def notify_admins_about_withdraw(
                 logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
         await admin_bot.session.close()
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"Ошибка уведомления админов: {e}")
 
 # --- Обработчики для соглашения ---
 @router.callback_query(F.data == "read_full_agreement")

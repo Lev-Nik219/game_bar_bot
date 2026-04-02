@@ -443,7 +443,20 @@ async def get_active_tournament() -> Optional[Tuple[int, str, int, int]]:
                 (now, now)
             )
             row = await cursor.fetchone()
-            return row if row else None
+            if row:
+                return row
+            # Если нет активных, проверяем есть ли турниры со статусом 'pending' (только созданные)
+            cursor = await db.execute(
+                "SELECT id, name, prize_points, end_time FROM tournaments WHERE status='pending' AND start_time <= ?",
+                (now,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                # Обновляем статус на active
+                await db.execute("UPDATE tournaments SET status='active' WHERE id=?", (row[0],))
+                await db.commit()
+                return row
+            return None
     return await execute_with_retry(_get)
 
 async def get_tournament_leaders(tournament_id: int, limit=10) -> List[tuple]:

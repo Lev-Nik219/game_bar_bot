@@ -112,7 +112,7 @@ async def show_user_tournaments(
     offset = page * limit
     tournaments = await get_user_tournaments(user_id, offset, limit)
     total = await count_user_tournaments(user_id)
-    total_pages = (total + limit - 1) // limit
+    total_pages = (total + limit - 1) // limit if total > 0 else 1
 
     if not tournaments:
         text = "📋 Вы ещё не участвовали ни в одном турнире."
