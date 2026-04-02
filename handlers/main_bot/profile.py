@@ -475,21 +475,45 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
     contact = message.text.strip()
     username = message.from_user.username
 
-    user_data = await get_user(user_id, username)
-    balance = user_data[0]
-    bonus_total = await get_bonus_total(user_id)
-    total_games = user_data[1]
-    withdrawals_count = user_data[15]
+    from database import execute_query
+    
+    # Получаем данные пользователя из PostgreSQL
+    row = await execute_query(
+        "SELECT balance, total_games, wins, withdrawals_count, bonus_total FROM users WHERE user_id = $1",
+        user_id, fetch_one=True
+    )
+    
+    if not row:
+        await message.answer("❌ Пользователь не найден.")
+        await state.clear()
+        return
+    
+    balance, total_games, wins, withdrawals_count, bonus_total = row
     real_balance = balance - bonus_total
 
-    allowed, error_msg = await check_withdraw_limits(user_id, amount_points, balance, bonus_total, total_games)
-    if not allowed:
-        await message.answer(error_msg)
+    # Проверки
+    if real_balance < 10:
+        await message.answer(f"❌ Минимальная сумма вывода — 10 баллов. Доступно: {real_balance} баллов.")
+        await state.clear()
+        return
+    
+    if total_games < MIN_GAMES_BEFORE_WITHDRAW:
+        await message.answer(f"❌ Вывод доступен после {MIN_GAMES_BEFORE_WITHDRAW} игр. Сыграно: {total_games}.")
+        await state.clear()
+        return
+    
+    if amount_points > real_balance:
+        await message.answer(f"❌ Недостаточно средств. Доступно: {real_balance} баллов.")
         await state.clear()
         return
 
-    if amount_points > real_balance:
-        await message.answer(f"❌ Недостаточно средств. Доступно: {real_balance} баллов.")
+    # Проверка на активную заявку
+    pending_count = await execute_query(
+        "SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'",
+        user_id, fetch_val=True
+    )
+    if pending_count > 0:
+        await message.answer("❌ У вас уже есть активная заявка на вывод. Дождитесь её обработки.")
         await state.clear()
         return
 
@@ -501,24 +525,32 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
         rate_text = "1.5"
 
     # Атомарное списание баланса
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute(
-            "UPDATE users SET balance = balance - ? WHERE user_id = ? AND balance >= ?",
-            (amount_points, user_id, amount_points)
-        )
-        if cursor.rowcount == 0:
-            await message.answer("❌ Ошибка списания средств.")
-            await state.clear()
-            return
-        await db.commit()
+    result = await execute_query(
+        "UPDATE users SET balance = balance - $1 WHERE user_id = $2 AND balance >= $1",
+        amount_points, user_id
+    )
+    
+    if not result or 'UPDATE 1' not in result:
+        await message.answer("❌ Ошибка списания средств.")
+        await state.clear()
+        return
 
     amount_rub = round(amount_points / rate, 2)
     amount_usdt = round(amount_rub / USD_RATE, 2)
 
-    await create_withdraw_request(user_id, amount_points, amount_usdt, contact)
-    await increment_withdrawals_count(user_id)
+    # Создаём заявку
+    await execute_query(
+        "INSERT INTO withdraw_requests (user_id, amount_points, amount_usdt, wallet_address, status) VALUES ($1, $2, $3, $4, 'pending')",
+        user_id, amount_points, amount_usdt, contact
+    )
+    
+    # Увеличиваем счётчик выводов
+    await execute_query(
+        "UPDATE users SET withdrawals_count = withdrawals_count + 1 WHERE user_id = $1",
+        user_id
+    )
 
-    # УБИРАЕМ ДУБЛИРОВАНИЕ - ОСТАВЛЯЕМ ТОЛЬКО ОДИН БЛОК
+    # Подтверждение пользователю
     await message.answer(
         f"✅ <b>Ваша заявка на вывод принята!</b>\n\n"
         f"📋 <b>Детали заявки:</b>\n"
@@ -538,10 +570,10 @@ async def withdraw_wallet(message: types.Message, state: FSMContext):
     await state.clear()
 
     # Уведомляем администраторов
-    asyncio.create_task(notify_admins_about_withdraw(
+    await notify_admins_about_withdraw(
         user_id, amount_points, amount_rub, amount_usdt, contact,
         username, message.bot, rate_text
-    ))
+    )
 
 async def notify_admins_about_limit_exceeded():
     try:
@@ -663,3 +695,5 @@ async def back_to_menu_callback(callback: types.CallbackQuery):
     )
     await callback.message.delete()
     await callback.message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+
+withdraw_wallet

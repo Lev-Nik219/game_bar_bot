@@ -1,16 +1,15 @@
 import asyncio
 import logging
 import aiosqlite
+import aiohttp
+import time
 from uuid import uuid4
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from database import (
-    DB_NAME, get_user, update_balance, add_deposit, create_crypto_transaction,
-    get_crypto_transaction_full, update_crypto_transaction_status
-)
-from keyboards import profile_keyboard, deposit_keyboard
+from database import get_user, update_balance, add_deposit, create_crypto_transaction, execute_query
+from keyboards import profile_keyboard, deposit_keyboard, payment_confirmation_keyboard
 from config import CRYPTOBOT_TOKEN
 from services.crypto_pay import crypto_pay_service
 from services.referral import award_referral_deposit_bonus
@@ -68,15 +67,18 @@ async def process_deposit(callback: types.CallbackQuery):
 
         await create_crypto_transaction(user_id, amount_rub, amount_points, payment_id, invoice_id)
 
+        # Клавиатура с кнопкой "Я оплатил"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
+        ])
+
         await callback.message.edit_text(
             f"💳 Для пополнения на {amount_points} баллов ({amount_rub} руб) "
             f"перейдите по ссылке и оплатите {usdt_amount} USDT:\n\n"
             f"{pay_url}\n\n"
             f"✅ После оплаты нажмите кнопку «Я оплатил» для проверки.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
-            ])
+            reply_markup=keyboard
         )
     except Exception as e:
         await callback.message.edit_text(
@@ -114,7 +116,7 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         return
 
     user_id = message.from_user.id
-    amount_rub = amount_points  # 1 рубль = 1 балл
+    amount_rub = amount_points
     payment_id = f"{user_id}_{uuid4().hex[:8]}"
     usdt_amount = round(amount_rub / 90, 2)
 
@@ -136,15 +138,18 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         await create_crypto_transaction(user_id, amount_rub, amount_points, payment_id, invoice_id)
 
         await state.clear()
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
+        ])
+        
         await message.answer(
             f"💳 Для пополнения на {amount_points} баллов ({amount_rub} руб) "
             f"перейдите по ссылке и оплатите {usdt_amount} USDT:\n\n"
             f"{pay_url}\n\n"
             f"✅ После оплаты нажмите кнопку «Я оплатил» для проверки.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
-            ])
+            reply_markup=keyboard
         )
     except Exception as e:
         await message.answer(f"❌ Ошибка при создании платежа: {str(e)}")
@@ -161,11 +166,18 @@ async def check_payment(callback: types.CallbackQuery):
     payment_id = callback.data.replace("check_payment_", "")
     user_id = callback.from_user.id
 
-    txn = await get_crypto_transaction_full(payment_id)
-    if not txn:
+    # Получаем транзакцию из PostgreSQL
+    row = await execute_query(
+        "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = $1",
+        payment_id, fetch_one=True
+    )
+    
+    if not row:
         await callback.answer("❌ Транзакция не найдена", show_alert=True)
         return
-    amount_points, status, invoice_id = txn
+    
+    amount_points, status, invoice_id = row
+    
     if status == 'paid':
         await callback.answer("✅ Платёж уже был зачислен ранее", show_alert=True)
         return
@@ -186,38 +198,41 @@ async def check_payment(callback: types.CallbackQuery):
         invoice_status = invoice.get('status')
 
         if invoice_status == 'paid':
-            balance, *_ = await get_user(user_id, callback.from_user.username)
+            # Получаем текущий баланс
+            balance = await execute_query("SELECT balance FROM users WHERE user_id = $1", user_id, fetch_val=True)
+            if balance is None:
+                balance = 0
+            
             new_balance = balance + amount_points
-            await update_balance(user_id, new_balance)
-            await update_crypto_transaction_status(payment_id, 'paid')
+            await execute_query("UPDATE users SET balance = $1 WHERE user_id = $2", new_balance, user_id)
+            await execute_query(
+                "UPDATE crypto_transactions SET status = 'paid', confirmed_at = $1 WHERE payment_id = $2",
+                int(time.time()), payment_id
+            )
             await add_deposit(user_id, amount_points)
 
             # Бонус за первый депозит (+50%)
-            async with aiosqlite.connect(DB_NAME) as db:
-                cursor = await db.execute(
-                    "SELECT first_deposit_bonus_claimed FROM users WHERE user_id = ?",
-                    (user_id,)
+            first_deposit_claimed = await execute_query(
+                "SELECT first_deposit_bonus_claimed FROM users WHERE user_id = $1",
+                user_id, fetch_val=True
+            )
+            
+            if not first_deposit_claimed:
+                bonus_amount = int(amount_points * 0.5)
+                await execute_query(
+                    "UPDATE users SET balance = balance + $1, bonus_total = bonus_total + $1, "
+                    "bonus_balance = bonus_balance + $1, first_deposit_bonus_claimed = 1 WHERE user_id = $2",
+                    bonus_amount, bonus_amount, bonus_amount, user_id
                 )
-                row = await cursor.fetchone()
-                first_deposit_claimed = row[0] if row else 0
+                new_balance += bonus_amount
                 
-                if not first_deposit_claimed:
-                    bonus_amount = int(amount_points * 0.5)
-                    await db.execute(
-                        "UPDATE users SET balance = balance + ?, bonus_total = bonus_total + ?, "
-                        "bonus_balance = bonus_balance + ?, first_deposit_bonus_claimed = 1 WHERE user_id = ?",
-                        (bonus_amount, bonus_amount, bonus_amount, user_id)
-                    )
-                    await db.commit()
-                    new_balance += bonus_amount
-                    
-                    await callback.bot.send_message(
-                        user_id,
-                        f"🎁 <b>Бонус за первый депозит!</b>\n\n"
-                        f"Вы получили +50% бонусных баллов: {bonus_amount} баллов!\n\n"
-                        f"🎲 Отыграйте их с вейджером 3x, чтобы вывести.",
-                        parse_mode="HTML"
-                    )
+                await callback.bot.send_message(
+                    user_id,
+                    f"🎁 <b>Бонус за первый депозит!</b>\n\n"
+                    f"Вы получили +50% бонусных баллов: {bonus_amount} баллов!\n\n"
+                    f"🎲 Отыграйте их с вейджером 3x, чтобы вывести.",
+                    parse_mode="HTML"
+                )
 
             await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
 
@@ -234,7 +249,7 @@ async def check_payment(callback: types.CallbackQuery):
                 reply_markup=keyboard
             )
         else:
-            await callback.answer("❌ Платёж ещё не найден или не оплачен. Попробуйте позже.", show_alert=True)
+            await callback.answer("❌ Платёж ещё не оплачен. Оплатите и нажмите «Я оплатил» снова.", show_alert=True)
     except Exception as e:
         logger.error(f"Ошибка при проверке: {e}")
         await callback.answer(f"❌ Ошибка проверки: {str(e)}", show_alert=True)

@@ -66,7 +66,6 @@ def achievements_back_keyboard() -> InlineKeyboardMarkup:
     ])
 
 def deposit_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура пополнения с кнопкой 'Я оплатил'"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="1000 баллов = 1000 руб (≈11.11 USDT)", callback_data="deposit_1000")],
         [InlineKeyboardButton(text="750 баллов = 750 руб (≈8.33 USDT)", callback_data="deposit_750")],
@@ -75,7 +74,6 @@ def deposit_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="💰 Другая сумма", callback_data="deposit_custom")],
         [InlineKeyboardButton(text="🔙 Назад в профиль", callback_data="profile")]
     ])
-
 # Новая клавиатура для подтверждения оплаты
 def payment_confirmation_keyboard(payment_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
