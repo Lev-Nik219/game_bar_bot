@@ -27,7 +27,7 @@ async def deposit_callback(callback: types.CallbackQuery):
     await callback.message.edit_text(
         "💰 Выберите сумму пополнения.\n\n"
         "Оплата в криптовалюте USDT по текущему курсу.\n"
-        "После оплаты баллы будут зачислены автоматически.",
+        "После оплаты нажмите «Я оплатил» для зачисления баллов.",
         reply_markup=deposit_keyboard()
     )
 
@@ -71,8 +71,11 @@ async def process_deposit(callback: types.CallbackQuery):
             f"💳 Для пополнения на {amount_points} баллов ({amount_rub} руб) "
             f"перейдите по ссылке и оплатите {usdt_amount} USDT:\n\n"
             f"{pay_url}\n\n"
-            f"✅ После оплаты баллы будут зачислены автоматически в течение 1-2 минут.\n"
-            f"Уведомление придёт в этот чат."
+            f"✅ После оплаты нажмите кнопку «Я оплатил» для проверки.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
+            ])
         )
     except Exception as e:
         await callback.message.edit_text(
@@ -92,7 +95,7 @@ async def deposit_custom_start(callback: types.CallbackQuery, state: FSMContext)
     await callback.message.edit_text(
         "💰 Введите желаемое количество баллов (целое число, минимум 10):\n\n"
         "Курс: 1.5 балла = 1 рубль.\n"
-        "После оплаты баллы будут зачислены автоматически.",
+        "После оплаты нажмите «Я оплатил» для зачисления.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Отмена", callback_data="deposit")]
         ])
@@ -136,9 +139,76 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
             f"💳 Для пополнения на {amount_points} баллов ({amount_rub} руб) "
             f"перейдите по ссылке и оплатите {usdt_amount} USDT:\n\n"
             f"{pay_url}\n\n"
-            f"✅ После оплаты баллы будут зачислены автоматически в течение 1-2 минут.\n"
-            f"Уведомление придёт в этот чат."
+            f"✅ После оплаты нажмите кнопку «Я оплатил» для проверки.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
+            ])
         )
     except Exception as e:
         await message.answer(f"❌ Ошибка при создании платежа: {str(e)}")
         await state.clear()
+
+# --- Проверка оплаты ---
+@router.callback_query(F.data.startswith("check_payment_"))
+async def check_payment(callback: types.CallbackQuery):
+    try:
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"Ошибка в callback.answer (check_payment): {e}")
+
+    payment_id = callback.data.replace("check_payment_", "")
+    user_id = callback.from_user.id
+
+    txn = await get_crypto_transaction_full(payment_id)
+    if not txn:
+        await callback.answer("❌ Транзакция не найдена", show_alert=True)
+        return
+    amount_points, status, invoice_id = txn
+    if status == 'paid':
+        await callback.answer("✅ Платёж уже был зачислен ранее", show_alert=True)
+        return
+
+    try:
+        response = await crypto_pay_service.get_invoice(int(invoice_id))
+        logger.debug(f"Ответ CryptoPay: {response}")
+
+        if not response.get('ok'):
+            await callback.answer(f"❌ Ошибка API", show_alert=True)
+            return
+
+        result = response.get('result', {})
+        items = result.get('items', [])
+        if not items:
+            await callback.answer("❌ Инвойс не найден.", show_alert=True)
+            return
+
+        invoice = items[0]
+        invoice_status = invoice.get('status')
+
+        if invoice_status == 'paid':
+            balance, *_ = await get_user(user_id, callback.from_user.username)
+            new_balance = balance + amount_points
+            await update_balance(user_id, new_balance)
+            await update_crypto_transaction_status(payment_id, 'paid')
+            await add_deposit(user_id, amount_points)
+
+            await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
+
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
+            ])
+
+            await callback.message.edit_text(
+                f"✅ <b>Оплата подтверждена!</b>\n\n"
+                f"💰 Начислено: {amount_points} баллов\n"
+                f"💎 Новый баланс: {new_balance} баллов\n\n"
+                f"Нажмите на кнопку ниже, чтобы вернуться в главное меню:",
+                parse_mode="HTML",
+                reply_markup=keyboard
+            )
+        else:
+            await callback.answer("❌ Платёж ещё не найден или не оплачен. Попробуйте позже.", show_alert=True)
+    except Exception as e:
+        logger.error(f"Ошибка при проверке: {e}")
+        await callback.answer(f"❌ Ошибка проверки: {str(e)}", show_alert=True)
