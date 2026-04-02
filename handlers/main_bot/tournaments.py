@@ -16,7 +16,10 @@ router = Router()
 async def get_tournament_message(user_id: int, bot) -> tuple[str, InlineKeyboardMarkup]:
     """Возвращает текст и клавиатуру для активного турнира."""
     tournament_data = await get_active_tournament()
-
+    
+    # Отладочный вывод (временно)
+    print(f"DEBUG: tournament_data = {tournament_data}")
+    
     if not tournament_data:
         text = "🏆 Сейчас нет активных турниров."
         buttons = [
@@ -27,10 +30,13 @@ async def get_tournament_message(user_id: int, bot) -> tuple[str, InlineKeyboard
         return text, keyboard
 
     tournament_id, name, prize, end_time = tournament_data
+    print(f"DEBUG: Турнир найден - id={tournament_id}, name={name}, prize={prize}, end_time={end_time}")
+    
     # Проверяем, не истекло ли время
-    if time.time() > end_time:
+    current_time = int(time.time())
+    if current_time > end_time:
+        print(f"DEBUG: Турнир истек, завершаем")
         await finish_tournament(tournament_id, bot)
-        # После завершения рекурсивно получаем сообщение (теперь без активного турнира)
         return await get_tournament_message(user_id, bot)
 
     leaders = await get_tournament_leaders(tournament_id)

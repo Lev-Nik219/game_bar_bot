@@ -222,24 +222,39 @@ async def cmd_start(message: types.Message):
         reply_markup=admin_main_keyboard()
     )
 
-    @router.message(Command("check_tournaments"))
-    async def check_tournaments(message: types.Message):
-        """Временная команда для проверки турниров в БД"""
-        user_id = message.from_user.id
-        if user_id not in ADMIN_IDS:
-            await message.answer("❌ У вас нет доступа к этой команде.")
+@router.message(Command("check_tournaments"))
+async def check_tournaments(message: types.Message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        await message.answer("❌ У вас нет доступа к этой команде.")
+        return
+    
+    async with aiosqlite.connect(DB_NAME) as conn:
+        # Проверяем все турниры
+        cursor = await conn.execute("SELECT id, name, prize_points, start_time, end_time, status FROM tournaments")
+        rows = await cursor.fetchall()
+        
+        if not rows:
+            await message.answer("❌ Нет турниров в базе данных")
             return
         
-        async with aiosqlite.connect(DB_NAME) as conn:
-            cursor = await conn.execute("SELECT id, name, prize_points, start_time, end_time, status FROM tournaments")
-            rows = await cursor.fetchall()
-            if rows:
-                text = "📋 Найденные турниры:\n\n"
-                for row in rows:
-                    text += f"ID: {row[0]}, Название: {row[1]}, Приз: {row[2]}, Статус: {row[5]}\n"
-                await message.answer(text)
-            else:
-                await message.answer("❌ Нет турниров в базе данных")
+        now = int(time.time())
+        text = "📋 Турниры в БД:\n\n"
+        for row in rows:
+            tid, name, prize, start_time, end_time, status = row
+            start_str = datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M')
+            end_str = datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M')
+            is_active = "✅" if (status == 'active' and start_time <= now <= end_time) else "❌"
+            text += f"{is_active} ID: {tid}\n"
+            text += f"   Название: {name}\n"
+            text += f"   Приз: {prize}\n"
+            text += f"   Статус: {status}\n"
+            text += f"   Начало: {start_str}\n"
+            text += f"   Конец: {end_str}\n"
+            text += f"   Текущее время: {datetime.fromtimestamp(now).strftime('%Y-%m-%d %H:%M')}\n"
+            text += "\n"
+        
+        await message.answer(text)
 
 @router.callback_query(F.data == "admin_cancel")
 async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
@@ -988,12 +1003,13 @@ async def create_tournament_duration(message: types.Message, state: FSMContext):
     name = data['name']
     prize = data['prize']
     now = int(time.time())
+    start_time = now  # Турнир начинается сейчас
     end_time = now + hours * 3600
     
     async with aiosqlite.connect(DB_NAME) as conn:
         await conn.execute(
             "INSERT INTO tournaments (name, prize_points, start_time, end_time, status) VALUES (?, ?, ?, ?, 'active')",
-            (name, prize, now, end_time)
+            (name, prize, start_time, end_time)
         )
         await conn.commit()
     
@@ -1002,7 +1018,9 @@ async def create_tournament_duration(message: types.Message, state: FSMContext):
         f"🏆 <b>Создан новый турнир!</b>\n\n"
         f"📌 <b>Название:</b> {name}\n"
         f"💰 <b>Приз:</b> {prize} баллов\n"
-        f"⏱️ <b>Длительность:</b> {hours} часов\n\n"
+        f"⏱️ <b>Длительность:</b> {hours} часов\n"
+        f"🕐 <b>Начало:</b> {datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M')}\n"
+        f"🕐 <b>Окончание:</b> {datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M')}\n\n"
         f"🎮 Турнир будет доступен в основном боте в разделе «Турниры»."
     )
     
