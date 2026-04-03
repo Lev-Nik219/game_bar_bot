@@ -209,7 +209,7 @@ async def check_payment(callback: types.CallbackQuery):
                 "UPDATE crypto_transactions SET status = 'paid', confirmed_at = $1 WHERE payment_id = $2",
                 int(time.time()), payment_id
             )
-            await add_deposit(user_id, amount_points)
+            await execute_query("INSERT INTO deposits (user_id, amount) VALUES ($1, $2)", user_id, amount_points)
 
             # Бонус за первый депозит (+50%)
             first_deposit_claimed = await execute_query(
@@ -222,7 +222,7 @@ async def check_payment(callback: types.CallbackQuery):
                 await execute_query(
                     "UPDATE users SET balance = balance + $1, bonus_total = bonus_total + $1, "
                     "bonus_balance = bonus_balance + $1, first_deposit_bonus_claimed = 1 WHERE user_id = $2",
-                    bonus_amount, bonus_amount, bonus_amount, user_id
+                    bonus_amount, user_id
                 )
                 new_balance += bonus_amount
                 

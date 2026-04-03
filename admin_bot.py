@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Update
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime
 
 from config import ADMIN_BOT_TOKEN, ADMIN_IDS, MAIN_BOT_TOKEN
@@ -442,7 +442,7 @@ async def admin_stats_main_callback(callback: types.CallbackQuery):
     active_users = await execute_query("SELECT COUNT(*) FROM users WHERE last_active > $1", threshold, fetch_val=True) or 0
     total_deposits = await execute_query("SELECT COUNT(*) FROM crypto_transactions WHERE status='paid'", fetch_val=True) or 0
     pending_withdrawals = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE status='pending'", fetch_val=True) or 0
-    total_deposit_sum = await execute_query("SELECT SUM(amount) FROM deposits", fetch_val=True) or 0
+    total_deposit_sum = await execute_query("SELECT COALESCE(SUM(amount), 0) FROM deposits", fetch_val=True) or 0
 
     text = (
         f"📊 <b>Общая статистика</b>\n\n"
@@ -924,7 +924,6 @@ async def main():
     dp.include_router(router)
     
     try:
-        # Убираем allowed_updates - пусть получает все обновления
         await dp.start_polling(bot)
     finally:
         await close_db_pool()

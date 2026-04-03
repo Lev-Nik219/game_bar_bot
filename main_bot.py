@@ -5,7 +5,7 @@ import os
 import time
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeDefault, Update
+from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from config import MAIN_BOT_TOKEN
 from database import create_db, init_db_pool, close_db_pool
@@ -58,8 +58,9 @@ dp.include_router(cashback_router)
 dp.include_router(fallback_router)
 
 @dp.errors()
-async def global_error_handler(update: Update, exception: Exception):
-    logger.error(f"Глобальная ошибка: {exception}", exc_info=True)
+async def global_error_handler(event: types.ErrorEvent):
+    """Глобальный обработчик ошибок"""
+    logger.error(f"Глобальная ошибка: {event.exception}", exc_info=True)
     return True
 
 async def on_startup():
@@ -68,8 +69,6 @@ async def on_startup():
     commands = [
         BotCommand(command="start", description="Запустить бота"),
         BotCommand(command="myid", description="Мой Telegram ID"),
-        BotCommand(command="cancel", description="Отменить текущее действие"),
-        BotCommand(command="cashback", description="Проверить кэшбек"),
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
     logger.info("База данных готова, команды установлены, бот запущен.")
@@ -86,7 +85,6 @@ async def main():
     
     dp.startup.register(on_startup)
     
-    # Убираем allowed_updates - пусть получает все обновления
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

@@ -8,7 +8,6 @@ import time
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Update
 
 from config import SUPPORT_BOT_TOKEN, ADMIN_IDS
 
@@ -97,8 +96,8 @@ async def handle_message(message: types.Message):
     )
 
 @dp.errors()
-async def global_error_handler(update: Update, exception: Exception):
-    logger.error(f"Глобальная ошибка в боте поддержки: {exception}", exc_info=True)
+async def global_error_handler(event: types.ErrorEvent):
+    logger.error(f"Глобальная ошибка в боте поддержки: {event.exception}", exc_info=True)
     return True
 
 async def main():
@@ -109,7 +108,6 @@ async def main():
     await asyncio.sleep(1)
     
     await bot.delete_webhook()
-    # Убираем allowed_updates - пусть получает все обновления
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
