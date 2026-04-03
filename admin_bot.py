@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from datetime import datetime
 
 from config import ADMIN_BOT_TOKEN, ADMIN_IDS, MAIN_BOT_TOKEN
@@ -924,7 +924,8 @@ async def main():
     dp.include_router(router)
     
     try:
-        await dp.start_polling(bot, allowed_updates=types.AllowedUpdates.ALL)
+        # Убираем allowed_updates - пусть получает все обновления
+        await dp.start_polling(bot)
     finally:
         await close_db_pool()
 

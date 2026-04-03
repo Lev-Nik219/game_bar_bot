@@ -5,7 +5,7 @@ import os
 import time
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeDefault
+from aiogram.types import BotCommand, BotCommandScopeDefault, Update
 
 from config import MAIN_BOT_TOKEN
 from database import create_db, init_db_pool, close_db_pool
@@ -19,8 +19,7 @@ from middlewares import UserStatusMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- Без Flask (healthcheck через отдельный простой сервер) ----------
-# Используем простой HTTP сервер на отдельном порту для healthcheck
+# Простой HTTP сервер для healthcheck
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
@@ -36,7 +35,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
     
     def log_message(self, format, *args):
-        pass  # Отключаем логи healthcheck сервера
+        pass
 
 def run_health_server():
     port = int(os.environ.get('PORT', 10000))
@@ -59,7 +58,7 @@ dp.include_router(cashback_router)
 dp.include_router(fallback_router)
 
 @dp.errors()
-async def global_error_handler(update: types.Update, exception: Exception):
+async def global_error_handler(update: Update, exception: Exception):
     logger.error(f"Глобальная ошибка: {exception}", exc_info=True)
     return True
 
@@ -86,7 +85,9 @@ async def main():
     await bot.delete_webhook()
     
     dp.startup.register(on_startup)
-    await dp.start_polling(bot, allowed_updates=types.AllowedUpdates.ALL)
+    
+    # Убираем allowed_updates - пусть получает все обновления
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
