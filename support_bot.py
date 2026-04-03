@@ -5,7 +5,6 @@ import threading
 import re
 import os
 import time
-from flask import Flask, jsonify
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -15,24 +14,27 @@ from config import SUPPORT_BOT_TOKEN, ADMIN_IDS
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- Flask ----------
-flask_app = Flask(__name__)
+# Простой HTTP сервер для healthcheck
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
-@flask_app.route('/')
-def home():
-    return jsonify({"status": "Support bot is running", "time": time.time()})
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health' or self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(b'{"status": "ok"}')
+        else:
+            self.send_response(404)
+        self.end_headers()
+    
+    def log_message(self, format, *args):
+        pass
 
-@flask_app.route('/health')
-def health():
-    return jsonify({"status": "ok"}), 200
-
-@flask_app.route('/favicon.ico')
-def favicon():
-    return '', 204
-
-def run_flask():
-    port = int(os.getenv('PORT', 10000))
-    flask_app.run(host='0.0.0.0', port=port)
+def run_health_server():
+    port = int(os.environ.get('PORT', 10000))
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    server.serve_forever()
 
 # ---------- Telegram Bot ----------
 bot = Bot(token=SUPPORT_BOT_TOKEN)
@@ -96,30 +98,17 @@ async def handle_message(message: types.Message):
 @dp.errors()
 async def global_error_handler(update: types.Update, exception: Exception):
     logger.error(f"Глобальная ошибка в боте поддержки: {exception}", exc_info=True)
-    try:
-        if update.message:
-            await update.message.answer(
-                "⚠️ Сервис временно недоступен. Ведутся технические работы.\n"
-                "Пожалуйста, попробуйте позже."
-            )
-        elif update.callback_query:
-            await update.callback_query.message.answer(
-                "⚠️ Сервис временно недоступен. Ведутся технические работы.\n"
-                "Пожалуйста, попробуйте позже."
-            )
-            try:
-                await update.callback_query.answer()
-            except:
-                pass
-    except Exception as e:
-        logger.error(f"Не удалось отправить сообщение об ошибке: {e}")
     return True
 
 async def main():
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    await asyncio.sleep(2)
-    await dp.start_polling(bot)
+    # Запускаем healthcheck сервер
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    
+    await asyncio.sleep(1)
+    
+    await bot.delete_webhook()
+    await dp.start_polling(bot, allowed_updates=types.AllowedUpdates.ALL)
 
 if __name__ == "__main__":
     asyncio.run(main())
