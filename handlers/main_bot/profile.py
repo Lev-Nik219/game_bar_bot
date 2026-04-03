@@ -314,22 +314,29 @@ async def achievements_menu_back_callback(callback: types.CallbackQuery):
 
 # --- Вывод средств ---
 async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_total: int, total_games: int) -> tuple[bool, str]:
+    from database import execute_query
+    
     real_balance = balance - bonus_total
     
     if real_balance < 10:
         return False, f"❌ Минимальная сумма вывода — 10 баллов. Доступно: {real_balance} баллов."
     
+    if amount > real_balance:
+        return False, f"❌ Недостаточно средств. Доступно: {real_balance} баллов."
+    
     if total_games < MIN_GAMES_BEFORE_WITHDRAW:
         return False, f"❌ Вывод доступен после {MIN_GAMES_BEFORE_WITHDRAW} игр. Сыграно: {total_games}."
     
-    pending_count = await get_pending_withdraw_count(user_id)
+    # Проверка на активную заявку (исправлено на PostgreSQL)
+    pending_count = await execute_query(
+        "SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'",
+        user_id, fetch_val=True
+    )
     if pending_count > 0:
-        async with aiosqlite.connect(DB_NAME) as db:
-            cursor = await db.execute(
-                "SELECT id, amount_points, created_at FROM withdraw_requests WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
-                (user_id,)
-            )
-            pending = await cursor.fetchone()
+        pending = await execute_query(
+            "SELECT id, amount_points, created_at FROM withdraw_requests WHERE user_id = $1 AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+            user_id, fetch_one=True
+        )
         if pending:
             req_id, amount_points, created_at = pending
             return False, f"❌ У вас уже есть активная заявка #{req_id} на {amount_points} баллов от {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')}. Дождитесь её обработки."
@@ -695,5 +702,3 @@ async def back_to_menu_callback(callback: types.CallbackQuery):
     )
     await callback.message.delete()
     await callback.message.answer(text, parse_mode="HTML", reply_markup=keyboard)
-
-withdraw_wallet

@@ -6,10 +6,10 @@ import os
 from typing import Optional, Tuple, List, Any, Dict
 
 # Получаем URL базы данных из переменных окружения Render
-DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://game_bar_db_user:Uc7EmLyrS86vR1gTIDeigkpJxSGY2iti@dpg-d6v7anea2pns73adhbhg-a/game_bar_db')
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
-# Для совместимости со старым кодом, где используется DB_NAME
-DB_NAME = "postgresql"  # Это не используется, но нужно для импорта
+# Для совместимости со старым кодом
+DB_NAME = "postgresql"
 
 # Глобальный пул соединений
 db_pool = None
@@ -22,6 +22,8 @@ async def init_db_pool():
     """Инициализирует пул соединений с PostgreSQL."""
     global db_pool
     if db_pool is None:
+        if not DATABASE_URL:
+            raise Exception("DATABASE_URL environment variable not set")
         db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
         print("✅ PostgreSQL пул соединений создан")
     return db_pool
@@ -424,7 +426,6 @@ async def get_active_tournament() -> Optional[Tuple[int, str, int, int]]:
             now, fetch_one=True
         )
         if row:
-            print(f"[DEBUG] Найден активный турнир: id={row[0]}, name={row[1]}, prize={row[2]}, end={row[3]}, now={now}")
             return tuple(row) if row else None
         
         row = await execute_query(
@@ -432,11 +433,9 @@ async def get_active_tournament() -> Optional[Tuple[int, str, int, int]]:
             now, fetch_one=True
         )
         if row:
-            print(f"[DEBUG] Найден pending турнир, активируем: id={row[0]}")
             await execute_query("UPDATE tournaments SET status = 'active' WHERE id = $1", row[0])
             return (row[0], row[1], row[2], row[3])
         
-        print(f"[DEBUG] Активных турниров нет. now={now}")
         return None
     return await execute_with_retry(_get)
 
