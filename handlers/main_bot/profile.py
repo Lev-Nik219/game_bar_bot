@@ -327,7 +327,7 @@ async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_t
     if total_games < MIN_GAMES_BEFORE_WITHDRAW:
         return False, f"❌ Вывод доступен после {MIN_GAMES_BEFORE_WITHDRAW} игр. Сыграно: {total_games}."
     
-    # Проверка на активную заявку (исправлено на PostgreSQL)
+    # Проверка на активную заявку
     pending_count = await execute_query(
         "SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'",
         user_id, fetch_val=True
@@ -356,7 +356,19 @@ async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_t
     if not is_cleared and bonus_balance > 0:
         required = bonus_balance * BONUS_WAGER_MULTIPLIER
         remaining = required - bonus_wagered
-        return False, f"❌ Бонус не отыгран. Нужно сыграть ещё {remaining} баллов."
+        # ПОДРОБНОЕ ПОЯСНЕНИЕ ДЛЯ ПОЛЬЗОВАТЕЛЯ
+        return False, (
+            f"❌ <b>Бонус не отыгран!</b>\n\n"
+            f"У вас есть бонусные баллы: {bonus_balance} 💎\n"
+            f"Чтобы их вывести, нужно сначала сыграть на сумму: {required} баллов\n"
+            f"Вы уже отыграли: {bonus_wagered} баллов\n"
+            f"<b>Осталось отыграть: {remaining} баллов</b>\n\n"
+            f"💡 <b>Что это значит?</b>\n"
+            f"• Бонусные баллы вы получили бесплатно (за регистрацию или депозит)\n"
+            f"• Вы не можете сразу вывести бонус — это защита от мошенников\n"
+            f"• Просто продолжайте играть — после отыгрыша бонус станет доступен для вывода\n\n"
+            f"🎮 Сыграйте ещё на {remaining} баллов, и бонус разблокируется!"
+        )
     
     return True, "OK"
 

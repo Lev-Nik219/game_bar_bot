@@ -16,6 +16,9 @@ from states import CustomDepositStates
 logger = logging.getLogger(__name__)
 router = Router()
 
+# Словарь для блокировки повторных нажатий
+processing_payments = set()
+
 @router.callback_query(F.data == "deposit")
 async def deposit_callback(callback: types.CallbackQuery):
     try:
@@ -25,7 +28,8 @@ async def deposit_callback(callback: types.CallbackQuery):
     await callback.message.edit_text(
         "💰 Выберите сумму пополнения.\n\n"
         "Оплата в криптовалюте USDT по текущему курсу.\n"
-        "После оплаты нажмите «Я оплатил» для зачисления баллов.",
+        "После оплаты нажмите «Я оплатил» для зачисления баллов.\n\n"
+        "⚠️ ВНИМАНИЕ: Кнопку «Я оплатил» можно нажать только ОДИН раз!",
         reply_markup=deposit_keyboard()
     )
 
@@ -65,8 +69,9 @@ async def process_deposit(callback: types.CallbackQuery):
 
         await create_crypto_transaction(user_id, amount_rub, amount_points, payment_id, invoice_id)
 
+        # Клавиатура с кнопкой "Я оплатил" (только один раз)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
+            [InlineKeyboardButton(text="✅ Я оплатил (только 1 раз)", callback_data=f"check_payment_{payment_id}")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
         ])
 
@@ -74,7 +79,9 @@ async def process_deposit(callback: types.CallbackQuery):
             f"💳 Для пополнения на {amount_points} баллов ({amount_rub} руб) "
             f"перейдите по ссылке и оплатите {usdt_amount} USDT:\n\n"
             f"{pay_url}\n\n"
-            f"✅ После оплаты нажмите кнопку «Я оплатил» для проверки.",
+            f"⚠️ <b>ВАЖНО:</b> Кнопку «Я оплатил» можно нажать ТОЛЬКО ОДИН раз!\n"
+            f"После нажатия кнопка исчезнет, и баллы будут зачислены.",
+            parse_mode="HTML",
             reply_markup=keyboard
         )
     except Exception as e:
@@ -95,7 +102,8 @@ async def deposit_custom_start(callback: types.CallbackQuery, state: FSMContext)
     await callback.message.edit_text(
         "💰 Введите желаемое количество баллов (целое число, минимум 10):\n\n"
         "Курс: 1 рубль = 1 балл.\n"
-        "После оплаты нажмите «Я оплатил» для зачисления.",
+        "После оплаты нажмите «Я оплатил» для зачисления.\n\n"
+        "⚠️ Кнопку можно нажать ТОЛЬКО ОДИН раз!",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Отмена", callback_data="deposit")]
         ])
@@ -137,7 +145,7 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         await state.clear()
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
+            [InlineKeyboardButton(text="✅ Я оплатил (только 1 раз)", callback_data=f"check_payment_{payment_id}")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
         ])
         
@@ -145,126 +153,157 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
             f"💳 Для пополнения на {amount_points} баллов ({amount_rub} руб) "
             f"перейдите по ссылке и оплатите {usdt_amount} USDT:\n\n"
             f"{pay_url}\n\n"
-            f"✅ После оплаты нажмите кнопку «Я оплатил» для проверки.",
+            f"⚠️ <b>ВАЖНО:</b> Кнопку «Я оплатил» можно нажать ТОЛЬКО ОДИН раз!\n"
+            f"После нажатия кнопка исчезнет, и баллы будут зачислены.",
+            parse_mode="HTML",
             reply_markup=keyboard
         )
     except Exception as e:
         await message.answer(f"❌ Ошибка при создании платежа: {str(e)}")
         await state.clear()
 
-# --- Проверка оплаты (кнопка «Я оплатил») ---
+# --- Проверка оплаты (кнопка «Я оплатил») - ИСПРАВЛЕНА ---
 @router.callback_query(F.data.startswith("check_payment_"))
 async def check_payment(callback: types.CallbackQuery):
-    try:
-        await callback.answer()
-    except Exception as e:
-        logger.error(f"Ошибка в callback.answer (check_payment): {e}")
-
     payment_id = callback.data.replace("check_payment_", "")
     user_id = callback.from_user.id
-    now = time.time()
-
-    # Получаем транзакцию из PostgreSQL
-    row = await execute_query(
-        "SELECT amount_points, status, invoice_id, created_at FROM crypto_transactions WHERE payment_id = $1",
-        payment_id, fetch_one=True
-    )
     
-    if not row:
-        await callback.answer("❌ Транзакция не найдена", show_alert=True)
+    # Блокируем повторные нажатия
+    lock_key = f"{user_id}_{payment_id}"
+    if lock_key in processing_payments:
+        await callback.answer("⏳ Платёж уже обрабатывается. Пожалуйста, подождите...", show_alert=True)
         return
     
-    amount_points, status, invoice_id, created_at = row
-    created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(created_at))
+    processing_payments.add(lock_key)
     
-    if status == 'paid':
-        # Получаем время подтверждения
-        confirmed_row = await execute_query(
-            "SELECT confirmed_at FROM crypto_transactions WHERE payment_id = $1",
+    try:
+        await callback.answer()
+        
+        # Получаем транзакцию из PostgreSQL
+        row = await execute_query(
+            "SELECT amount_points, status, invoice_id, created_at FROM crypto_transactions WHERE payment_id = $1",
             payment_id, fetch_one=True
         )
-        confirmed_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(confirmed_row[0])) if confirmed_row and confirmed_row[0] else created_date
         
-        # Показываем информацию об уже зачисленном платеже
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
-        ])
-        await callback.message.edit_text(
-            f"✅ <b>Платёж уже был зачислен ранее!</b>\n\n"
-            f"📅 Дата оплаты: {confirmed_date}\n"
-            f"💰 Сумма: {amount_points} баллов\n\n"
-            f"Нажмите на кнопку ниже, чтобы вернуться в главное меню:",
-            parse_mode="HTML",
-            reply_markup=keyboard
-        )
-        return
-
-    try:
-        response = await crypto_pay_service.get_invoice(int(invoice_id))
-        if not response.get('ok'):
-            await callback.answer(f"❌ Ошибка API", show_alert=True)
+        if not row:
+            await callback.answer("❌ Транзакция не найдена", show_alert=True)
             return
-
-        result = response.get('result', {})
-        items = result.get('items', [])
-        if not items:
-            await callback.answer("❌ Инвойс не найден.", show_alert=True)
-            return
-
-        invoice = items[0]
-        invoice_status = invoice.get('status')
-        paid_at = invoice.get('paid_at') or int(time.time())
-
-        if invoice_status == 'paid':
-            # Получаем текущий баланс
-            balance = await execute_query("SELECT balance FROM users WHERE user_id = $1", user_id, fetch_val=True)
-            if balance is None:
-                balance = 0
-            
-            new_balance = balance + amount_points
-            await execute_query("UPDATE users SET balance = $1 WHERE user_id = $2", new_balance, user_id)
-            await execute_query(
-                "UPDATE crypto_transactions SET status = 'paid', confirmed_at = $1 WHERE payment_id = $2",
-                int(paid_at), payment_id
+        
+        amount_points, status, invoice_id, created_at = row
+        created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(created_at))
+        
+        # Если уже оплачено - показываем информацию и УДАЛЯЕМ КНОПКУ
+        if status == 'paid':
+            confirmed_row = await execute_query(
+                "SELECT confirmed_at FROM crypto_transactions WHERE payment_id = $1",
+                payment_id, fetch_one=True
             )
-            await add_deposit(user_id, amount_points)
-
-            paid_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(paid_at))
-
-            # Бонус за первый депозит (+50%)
-            first_deposit_claimed = await execute_query(
-                "SELECT first_deposit_bonus_claimed FROM users WHERE user_id = $1",
-                user_id, fetch_val=True
-            )
+            confirmed_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(confirmed_row[0])) if confirmed_row and confirmed_row[0] else created_date
             
-            bonus_text = ""
-            if not first_deposit_claimed:
-                bonus_amount = int(amount_points * 0.5)
-                await execute_query(
-                    "UPDATE users SET balance = balance + $1, bonus_total = bonus_total + $1, "
-                    "bonus_balance = bonus_balance + $1, first_deposit_bonus_claimed = 1 WHERE user_id = $2",
-                    bonus_amount, user_id
-                )
-                new_balance += bonus_amount
-                bonus_text = f"\n\n🎁 <b>Бонус за первый депозит: +{bonus_amount} баллов!</b>\n🎲 Отыграйте с вейджером 3x."
-
-            await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
-
+            # Удаляем кнопку - показываем только информацию
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
             ])
-
             await callback.message.edit_text(
-                f"✅ <b>Оплата подтверждена!</b>\n\n"
-                f"📅 Дата оплаты: {paid_date}\n"
-                f"💰 Начислено: {amount_points} баллов\n"
-                f"💎 Новый баланс: {new_balance} баллов{bonus_text}\n\n"
-                f"Нажмите на кнопку ниже, чтобы вернуться в главное меню:",
+                f"✅ <b>Платёж уже был зачислен ранее!</b>\n\n"
+                f"📅 Дата оплаты: {confirmed_date}\n"
+                f"💰 Сумма: {amount_points} баллов\n\n"
+                f"Повторное начисление невозможно.",
                 parse_mode="HTML",
                 reply_markup=keyboard
             )
-        else:
-            await callback.answer("❌ Платёж ещё не оплачен. Оплатите и нажмите «Я оплатил» снова.", show_alert=True)
-    except Exception as e:
-        logger.error(f"Ошибка при проверке: {e}")
-        await callback.answer(f"❌ Ошибка проверки: {str(e)}", show_alert=True)
+            return
+        
+        # Проверяем статус в CryptoPay
+        try:
+            response = await crypto_pay_service.get_invoice(int(invoice_id))
+            if not response.get('ok'):
+                await callback.answer(f"❌ Ошибка API", show_alert=True)
+                return
+
+            result = response.get('result', {})
+            items = result.get('items', [])
+            if not items:
+                await callback.answer("❌ Инвойс не найден.", show_alert=True)
+                return
+
+            invoice = items[0]
+            invoice_status = invoice.get('status')
+            paid_at = invoice.get('paid_at') or int(time.time())
+
+            if invoice_status == 'paid':
+                # Получаем текущий баланс
+                balance = await execute_query("SELECT balance FROM users WHERE user_id = $1", user_id, fetch_val=True)
+                if balance is None:
+                    balance = 0
+                
+                new_balance = balance + amount_points
+                await execute_query("UPDATE users SET balance = $1 WHERE user_id = $2", new_balance, user_id)
+                await execute_query(
+                    "UPDATE crypto_transactions SET status = 'paid', confirmed_at = $1 WHERE payment_id = $2",
+                    int(paid_at), payment_id
+                )
+                await add_deposit(user_id, amount_points)
+
+                paid_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(paid_at))
+
+                # Бонус за первый депозит (+50%)
+                first_deposit_claimed = await execute_query(
+                    "SELECT first_deposit_bonus_claimed FROM users WHERE user_id = $1",
+                    user_id, fetch_val=True
+                )
+                
+                bonus_text = ""
+                if not first_deposit_claimed:
+                    bonus_amount = int(amount_points * 0.5)
+                    await execute_query(
+                        "UPDATE users SET balance = balance + $1, bonus_total = bonus_total + $1, "
+                        "bonus_balance = bonus_balance + $1, first_deposit_bonus_claimed = 1 WHERE user_id = $2",
+                        bonus_amount, user_id
+                    )
+                    new_balance += bonus_amount
+                    bonus_text = f"\n\n🎁 <b>Бонус за первый депозит: +{bonus_amount} баллов!</b>\n🎲 Отыграйте с вейджером 3x."
+
+                await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
+
+                # Удаляем кнопку "Я оплатил" - показываем только результат
+                keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
+                ])
+
+                await callback.message.edit_text(
+                    f"✅ <b>Оплата подтверждена!</b>\n\n"
+                    f"📅 Дата оплаты: {paid_date}\n"
+                    f"💰 Начислено: {amount_points} баллов\n"
+                    f"💎 Новый баланс: {new_balance} баллов{bonus_text}\n\n"
+                    f"Нажмите на кнопку ниже, чтобы вернуться в главное меню:",
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+                
+                # Отправляем дополнительное уведомление в чат
+                await callback.bot.send_message(
+                    user_id,
+                    f"✅ Платёж успешно зачислен!\n"
+                    f"💰 +{amount_points} баллов\n"
+                    f"💎 Текущий баланс: {new_balance} баллов",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")]
+                    ])
+                )
+            else:
+                # Платёж не оплачен - показываем предупреждение, но кнопку оставляем
+                await callback.answer(
+                    "❌ Платёж ещё не оплачен.\n\n"
+                    "1. Оплатите по ссылке\n"
+                    "2. Вернитесь в бота\n"
+                    "3. Нажмите «Я оплатил» ещё раз\n\n"
+                    "Если вы уже оплатили, подождите 1-2 минуты и попробуйте снова.",
+                    show_alert=True
+                )
+        except Exception as e:
+            logger.error(f"Ошибка при проверке платежа: {e}")
+            await callback.answer(f"❌ Ошибка проверки: {str(e)[:50]}", show_alert=True)
+    finally:
+        # Снимаем блокировку
+        processing_payments.discard(lock_key)

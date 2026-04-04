@@ -83,7 +83,7 @@ def payment_confirmation_keyboard(payment_id: str) -> InlineKeyboardMarkup:
 
 def back_to_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="back_to_menu")]
     ])
 
 def quick_bet_keyboard() -> InlineKeyboardMarkup:
