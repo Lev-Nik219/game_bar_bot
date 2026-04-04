@@ -26,7 +26,6 @@ def parse_crypto_time(time_str):
         return time_str
     if isinstance(time_str, str):
         try:
-            # Формат: 2026-04-04T13:05:36.703Z
             dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
             return int(dt.timestamp())
         except:
@@ -111,7 +110,10 @@ async def deposit_custom_start(callback: types.CallbackQuery, state: FSMContext)
         logger.error(f"Ошибка в callback.answer (deposit_custom_start): {e}")
 
     await state.set_state(CustomDepositStates.waiting_for_amount)
-    await callback.message.edit_text(
+    
+    # Отправляем новое сообщение, а не редактируем старое
+    await callback.message.delete()
+    await callback.message.answer(
         "💰 Введите желаемое количество баллов (целое число, минимум 10):\n\n"
         "Курс: 1 рубль = 1 балл.\n"
         "После оплаты нажмите «Я оплатил» для зачисления.\n\n"
@@ -126,10 +128,13 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
     try:
         amount_points = int(message.text)
         if amount_points < 10:
-            await message.answer("❌ Минимальная сумма — 10 баллов.")
+            await message.answer("❌ Минимальная сумма — 10 баллов. Введите число от 10 и выше:")
+            return
+        if amount_points > 100000:
+            await message.answer("❌ Максимальная сумма — 100000 баллов. Введите число до 100000:")
             return
     except ValueError:
-        await message.answer("❌ Введите целое число.")
+        await message.answer("❌ Введите целое число. Пример: 100")
         return
 
     user_id = message.from_user.id
@@ -154,7 +159,11 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
 
         await create_crypto_transaction(user_id, amount_rub, amount_points, payment_id, invoice_id)
 
+        # Очищаем состояние
         await state.clear()
+        
+        # Удаляем сообщение с вводом суммы
+        await message.delete()
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"pay_{payment_id}")],
@@ -165,15 +174,16 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
             f"💳 Для пополнения на {amount_points} баллов ({amount_rub} руб) "
             f"перейдите по ссылке и оплатите {usdt_amount} USDT:\n\n"
             f"{pay_url}\n\n"
-            f"⚠️ <b>ВАЖНО:</b> После оплаты нажмите кнопку «Я оплатил».",
+            f"⚠️ <b>ВАЖНО:</b> После оплаты нажмите кнопку «Я оплатил».\n"
+            f"Кнопка исчезнет после нажатия.",
             parse_mode="HTML",
             reply_markup=keyboard
         )
     except Exception as e:
-        await message.answer(f"❌ Ошибка при создании платежа: {str(e)}")
         await state.clear()
+        await message.answer(f"❌ Ошибка при создании платежа: {str(e)}")
 
-# ===== НОВАЯ СИСТЕМА КНОПКИ "Я ОПЛАТИЛ" =====
+# ===== ОБРАБОТЧИК КНОПКИ "Я ОПЛАТИЛ" =====
 @router.callback_query(F.data.startswith("pay_"))
 async def process_payment_click(callback: types.CallbackQuery):
     payment_id = callback.data.replace("pay_", "")
@@ -181,7 +191,7 @@ async def process_payment_click(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
     message_id = callback.message.message_id
     
-    # Показываем уведомление о начале обработки
+    # Показываем уведомление
     await callback.answer("⏳ Обрабатываю платеж...", show_alert=False)
     
     # 1. СРАЗУ УДАЛЯЕМ СООБЩЕНИЕ С КНОПКОЙ
@@ -190,7 +200,7 @@ async def process_payment_click(callback: types.CallbackQuery):
     except Exception as e:
         logger.error(f"Не удалось удалить сообщение: {e}")
     
-    # Отправляем временное сообщение о проверке
+    # Отправляем временное сообщение
     temp_msg = await callback.bot.send_message(
         chat_id,
         "⏳ Проверяю статус платежа. Пожалуйста, подождите..."
@@ -270,11 +280,10 @@ async def process_payment_click(callback: types.CallbackQuery):
         invoice_status = invoice.get('status')
         
         if invoice_status == 'paid':
-            # ИСПРАВЛЕНО: правильно обрабатываем дату из CryptoPay
             paid_at_raw = invoice.get('paid_at') or int(time.time())
             paid_at = parse_crypto_time(paid_at_raw)
             
-            # 6. НАЧИСЛЯЕМ БАЛЛЫ
+            # НАЧИСЛЯЕМ БАЛЛЫ
             balance = await execute_query("SELECT balance FROM users WHERE user_id = $1", user_id, fetch_val=True) or 0
             new_balance = balance + amount_points
             
@@ -304,10 +313,10 @@ async def process_payment_click(callback: types.CallbackQuery):
             
             await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
             
-            # 7. Удаляем временное сообщение
+            # Удаляем временное сообщение
             await temp_msg.delete()
             
-            # 8. Отправляем сообщение об успехе
+            # Отправляем сообщение об успехе
             paid_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(paid_at))
             
             await callback.bot.send_message(
@@ -324,11 +333,9 @@ async def process_payment_click(callback: types.CallbackQuery):
                 ])
             )
             
-            # 9. Добавляем в список обработанных
             processed_payments.add(payment_id)
             
         else:
-            # Платёж не оплачен - сообщаем об этом
             await temp_msg.delete()
             await callback.bot.send_message(
                 chat_id,
@@ -336,7 +343,7 @@ async def process_payment_click(callback: types.CallbackQuery):
                 "1. Оплатите по ссылке\n"
                 "2. Вернитесь в бота\n"
                 "3. Нажмите кнопку «Я оплатил» снова\n\n"
-                "Если вы уже оплатили, подождите 1-2 минуты и попробуйте снова.",
+                "Если вы уже оплатили, подождите 1-2 минуты.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="💰 Пополнить снова", callback_data="deposit")],
                     [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
@@ -348,7 +355,7 @@ async def process_payment_click(callback: types.CallbackQuery):
         await temp_msg.delete()
         await callback.bot.send_message(
             chat_id,
-            f"❌ Ошибка проверки платежа: {str(e)[:100]}\n\nПопробуйте позже или обратитесь к администратору.",
+            f"❌ Ошибка проверки платежа.\n\nПопробуйте позже.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
             ])
