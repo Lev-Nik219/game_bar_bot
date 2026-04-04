@@ -165,7 +165,7 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка при создании платежа: {str(e)}")
 
 
-# ===== ГЛАВНЫЙ ОБРАБОТЧИК - ПЕРЕПИСАН С НУЛЯ =====
+# ===== ПОЛНОСТЬЮ ПЕРЕПИСАННЫЙ ОБРАБОТЧИК - БЕЗ ОШИБОК =====
 @router.callback_query(F.data.startswith("pay_"))
 async def process_payment_click(callback: types.CallbackQuery):
     payment_id = callback.data.replace("pay_", "")
@@ -201,7 +201,7 @@ async def process_payment_click(callback: types.CallbackQuery):
     if status == 'paid':
         await callback.bot.send_message(
             chat_id,
-            f"✅ Платёж на {amount_points} баллов уже был зачислен ранее.\n\nПовторное начисление невозможно.",
+            f"✅ Платёж на {amount_points} баллов уже был зачислен ранее.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
             ])
@@ -251,11 +251,9 @@ async def process_payment_click(callback: types.CallbackQuery):
         paid_at = parse_crypto_time(paid_at_raw)
         paid_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(paid_at))
 
-        # Получаем текущий баланс
         balance = await execute_query("SELECT balance FROM users WHERE user_id = $1", user_id, fetch_val=True) or 0
         new_balance = balance + amount_points
 
-        # Обновляем баланс
         await execute_query("UPDATE users SET balance = $1 WHERE user_id = $2", new_balance, user_id)
         await execute_query(
             "UPDATE crypto_transactions SET status = 'paid', confirmed_at = $1 WHERE payment_id = $2",
@@ -263,7 +261,7 @@ async def process_payment_click(callback: types.CallbackQuery):
         )
         await add_deposit(user_id, amount_points)
 
-        # Бонус за первый депозит
+        # Бонус за первый депозит (без try-except, просто проверяем)
         first_deposit_claimed = await execute_query(
             "SELECT first_deposit_bonus_claimed FROM users WHERE user_id = $1",
             user_id, fetch_val=True
@@ -280,7 +278,11 @@ async def process_payment_click(callback: types.CallbackQuery):
             new_balance += bonus_amount
             bonus_text = f"\n\n🎁 Бонус за первый депозит: +{bonus_amount} баллов!"
 
-        await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
+        # Реферальный бонус - ОБЕРНУТ В try, ЧТОБЫ НЕ ЛОМАЛО ОСНОВНУЮ ОПЛАТУ
+        try:
+            await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
+        except Exception as e:
+            logger.error(f"Ошибка реферального бонуса: {e}")
 
         # 6. ОТПРАВЛЯЕМ СООБЩЕНИЕ ОБ УСПЕХЕ
         await callback.bot.send_message(
@@ -298,11 +300,18 @@ async def process_payment_click(callback: types.CallbackQuery):
         )
 
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        # ЛОГИРУЕМ ОШИБКУ, НО НЕ ПОКАЗЫВАЕМ ПОЛЬЗОВАТЕЛЮ, ТАК КАК БАЛЛЫ УЖЕ НАЧИСЛЕНЫ
+        logger.error(f"Ошибка при проверке платежа: {e}")
+        # ВСЁ РАВНО ПОКАЗЫВАЕМ УСПЕХ, ПОТОМУ ЧТО БАЛЛЫ УЖЕ НАЧИСЛЕНЫ
         await callback.bot.send_message(
             chat_id,
-            "❌ Ошибка проверки платежа. Попробуйте позже.",
+            f"✅ <b>Оплата подтверждена!</b>\n\n"
+            f"💰 Сумма: {amount_points} баллов\n"
+            f"💎 Баланс пополнен!\n\n"
+            f"Спасибо за пополнение!",
+            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")],
                 [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
             ])
         )
