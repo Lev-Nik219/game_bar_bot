@@ -15,7 +15,7 @@ from database import (
     create_withdraw_request, get_demo_games_played,
     get_daily_withdrawn, get_last_deposit_time, get_pending_withdraw_count,
     get_daily_total_withdrawn_rub, get_bonus_wagering_status, update_bonus_wagered,
-    DB_NAME
+    execute_query, DB_NAME
 )
 from keyboards import (
     profile_keyboard, main_reply_keyboard, games_menu_keyboard,
@@ -321,9 +321,8 @@ async def achievements_menu_back_callback(callback: types.CallbackQuery):
 
 # --- Вывод средств ---
 async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_total: int, total_games: int) -> tuple[bool, str]:
-    from database import execute_query
+    from database import execute_query, get_daily_withdrawn, get_last_deposit_time, get_pending_withdraw_count, get_bonus_wagering_status
     from config import MIN_GAMES_BEFORE_WITHDRAW, DAILY_WITHDRAW_LIMIT, WITHDRAW_COOLDOWN_HOURS, BONUS_WAGER_MULTIPLIER
-    from . import get_daily_withdrawn, get_last_deposit_time
     
     real_balance = balance - bonus_total
     
@@ -337,10 +336,7 @@ async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_t
         return False, f"❌ Вывод доступен после {MIN_GAMES_BEFORE_WITHDRAW} игр. Сыграно: {total_games}."
     
     # Проверка на активную заявку
-    pending_count = await execute_query(
-        "SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'",
-        user_id, fetch_val=True
-    )
+    pending_count = await get_pending_withdraw_count(user_id)
     if pending_count > 0:
         pending = await execute_query(
             "SELECT id, amount_points, created_at FROM withdraw_requests WHERE user_id = $1 AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
@@ -348,7 +344,6 @@ async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_t
         )
         if pending:
             req_id, amount_points, created_at = pending
-            from datetime import datetime
             return False, f"❌ У вас уже есть активная заявка #{req_id} на {amount_points} баллов от {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')}. Дождитесь её обработки."
         return False, "❌ У вас уже есть активная заявка на вывод."
     
@@ -362,28 +357,22 @@ async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_t
         hours_left = (cooldown_seconds - (time.time() - last_deposit)) // 3600
         return False, f"❌ Вывод доступен через {hours_left} ч после пополнения."
     
-    row = await execute_query(
-        "SELECT bonus_balance, bonus_wagered FROM users WHERE user_id = $1",
-        user_id, fetch_one=True
-    )
-    if row:
-        bonus_balance, bonus_wagered = row
-        required_wagered = bonus_balance * BONUS_WAGER_MULTIPLIER
-        is_cleared = bonus_balance == 0 or bonus_wagered >= required_wagered
-        if not is_cleared and bonus_balance > 0:
-            remaining = required_wagered - bonus_wagered
-            return False, (
-                f"❌ <b>Бонус не отыгран!</b>\n\n"
-                f"У вас есть бонусные баллы: {bonus_balance} 💎\n"
-                f"Чтобы их вывести, нужно сначала сыграть на сумму: {required_wagered} баллов\n"
-                f"Вы уже отыграли: {bonus_wagered} баллов\n"
-                f"<b>Осталось отыграть: {remaining} баллов</b>\n\n"
-                f"💡 <b>Что это значит?</b>\n"
-                f"• Бонусные баллы вы получили бесплатно (за регистрацию или депозит)\n"
-                f"• Вы не можете сразу вывести бонус — это защита от мошенников\n"
-                f"• Просто продолжайте играть — после отыгрыша бонус станет доступен для вывода\n\n"
-                f"🎮 Сыграйте ещё на {remaining} баллов, и бонус разблокируется!"
-            )
+    bonus_balance, bonus_wagered, is_cleared = await get_bonus_wagering_status(user_id)
+    if not is_cleared and bonus_balance > 0:
+        required = bonus_balance * BONUS_WAGER_MULTIPLIER
+        remaining = required - bonus_wagered
+        return False, (
+            f"❌ <b>Бонус не отыгран!</b>\n\n"
+            f"У вас есть бонусные баллы: {bonus_balance} 💎\n"
+            f"Чтобы их вывести, нужно сначала сыграть на сумму: {required} баллов\n"
+            f"Вы уже отыграли: {bonus_wagered} баллов\n"
+            f"<b>Осталось отыграть: {remaining} баллов</b>\n\n"
+            f"💡 <b>Что это значит?</b>\n"
+            f"• Бонусные баллы вы получили бесплатно (за регистрацию или депозит)\n"
+            f"• Вы не можете сразу вывести бонус — это защита от мошенников\n"
+            f"• Просто продолжайте играть — после отыгрыша бонус станет доступен для вывода\n\n"
+            f"🎮 Сыграйте ещё на {remaining} баллов, и бонус разблокируется!"
+        )
     
     return True, "OK"
 
