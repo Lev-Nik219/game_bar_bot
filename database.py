@@ -19,7 +19,6 @@ BONUS_WAGER_MULTIPLIER = 3
 CASHBACK_PERCENT = 5
 
 async def init_db_pool():
-    """Инициализирует пул соединений с PostgreSQL."""
     global db_pool
     if db_pool is None:
         if not DATABASE_URL:
@@ -29,7 +28,6 @@ async def init_db_pool():
     return db_pool
 
 async def close_db_pool():
-    """Закрывает пул соединений."""
     global db_pool
     if db_pool:
         await db_pool.close()
@@ -37,7 +35,6 @@ async def close_db_pool():
         print("✅ PostgreSQL пул соединений закрыт")
 
 async def execute_query(query: str, *args, fetch_one: bool = False, fetch_all: bool = False, fetch_val: bool = False):
-    """Выполняет SQL запрос с автоматическим получением пула."""
     pool = await init_db_pool()
     async with pool.acquire() as conn:
         if fetch_one:
@@ -51,7 +48,6 @@ async def execute_query(query: str, *args, fetch_one: bool = False, fetch_all: b
             return await conn.execute(query, *args)
 
 async def execute_with_retry(func, *args, max_attempts=5, base_delay=0.5):
-    """Выполняет функцию с повторными попытками при ошибках."""
     for attempt in range(max_attempts):
         try:
             return await func(*args)
@@ -65,7 +61,6 @@ async def execute_with_retry(func, *args, max_attempts=5, base_delay=0.5):
 
 # ========== СОЗДАНИЕ ТАБЛИЦ ==========
 async def create_db():
-    """Создаёт все необходимые таблицы в PostgreSQL."""
     pool = await init_db_pool()
     async with pool.acquire() as conn:
         await conn.execute('''
@@ -414,6 +409,7 @@ async def count_user_tournaments(user_id: int) -> int:
     val = await execute_query("SELECT COUNT(*) FROM tournament_participants WHERE user_id = $1", user_id, fetch_val=True)
     return val if val else 0
 
+# ИСПРАВЛЕННАЯ ФУНКЦИЯ update_tournament_score - убрана неоднозначность с score
 async def update_tournament_score(user_id: int, score_gain: int):
     now = int(time.time())
     row = await execute_query(
@@ -422,9 +418,10 @@ async def update_tournament_score(user_id: int, score_gain: int):
     )
     if row:
         tournament_id = row[0]
+        # Используем явное указание таблицы для поля score
         await execute_query(
             "INSERT INTO tournament_participants (tournament_id, user_id, score) VALUES ($1, $2, $3) "
-            "ON CONFLICT (tournament_id, user_id) DO UPDATE SET score = score + $3, last_update = $4",
+            "ON CONFLICT (tournament_id, user_id) DO UPDATE SET score = tournament_participants.score + $3, last_update = $4",
             tournament_id, user_id, score_gain, now
         )
 

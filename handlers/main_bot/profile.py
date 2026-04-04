@@ -248,8 +248,10 @@ async def profile_callback(callback: types.CallbackQuery):
 @router.callback_query(F.data == "achievements")
 async def achievements_menu_callback(callback: types.CallbackQuery):
     await callback.answer()
-    text = "🏆 Раздел достижений\n\nВыберите действие:"
-    await callback.message.edit_text(text, reply_markup=achievements_menu_keyboard())
+    await callback.message.edit_text(
+        "🏆 Раздел достижений\n\nВыберите действие:",
+        reply_markup=achievements_menu_keyboard()
+    )
 
 @router.callback_query(F.data == "achievements_all")
 async def achievements_all_callback(callback: types.CallbackQuery):
@@ -278,9 +280,14 @@ async def achievements_all_callback(callback: types.CallbackQuery):
 async def achievements_my_callback(callback: types.CallbackQuery):
     await callback.answer()
     user_id = callback.from_user.id
-    async with aiosqlite.connect(DB_NAME) as db:
-        cursor = await db.execute("SELECT achievement_id FROM achievements WHERE user_id = ?", (user_id,))
-        rows = await cursor.fetchall()
+    
+    from database import execute_query
+    
+    rows = await execute_query(
+        "SELECT achievement_id FROM achievements WHERE user_id = $1",
+        user_id, fetch_all=True
+    )
+    
     if rows:
         achievement_names = {
             'first_win': 'Первая победа',
@@ -386,6 +393,9 @@ async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
     
     user_id = callback.from_user.id
     username = callback.from_user.username
+    
+    logger.info(f"Withdraw button clicked by user {user_id}")
+    
     user_data = await get_user(user_id, username)
     balance = user_data[0]
     bonus_total = await get_bonus_total(user_id)
@@ -395,28 +405,15 @@ async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
     
     allowed, error_msg = await check_withdraw_limits(user_id, 0, balance, bonus_total, total_games)
     if not allowed:
-        # Отправляем сообщение в чат, а не только алерт
         await callback.message.answer(error_msg, parse_mode="HTML")
         return
     
     if withdrawals_count == 0:
         rate = FIRST_WITHDRAW_RATE
         rate_text = f"{FIRST_WITHDRAW_RATE} балла = 1 рубль (первый вывод)"
-        explanation = (
-            "ℹ️ <b>Почему первый вывод по курсу 3?</b>\n"
-            "• Вы получили 50 бонусных баллов за регистрацию\n"
-            "• Реферальные бонусы также увеличивают ваш баланс\n"
-            "• Это защита от бонус-хантеров, которые пытаются вывести бонусы, не играя\n\n"
-            "💡 <b>Совет:</b> Сыграйте 5 игр, и со второго вывода курс станет 1.5 балла = 1 рубль\n"
-            "🎁 Вы всё равно в плюсе: за 1000 руб вы получаете 1500 баллов, а вывести можете по 3 (500 руб) + бонусы!"
-        )
     else:
         rate = STANDARD_WITHDRAW_RATE
         rate_text = f"{STANDARD_WITHDRAW_RATE} балла = 1 рубль"
-        explanation = (
-            "ℹ️ Курс вывода: 1.5 балла = 1 рубль\n"
-            "🎉 Поздравляем! Вы прошли первый вывод, теперь курс для вас стандартный."
-        )
     
     max_rub = int(real_balance / rate)
     max_usdt = round(max_rub / USD_RATE, 2) if max_rub > 0 else 0
@@ -434,7 +431,6 @@ async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
             f"💎 Доступно: {real_balance} баллов\n\n"
             f"🔄 <b>Курс вывода:</b> {rate_text}\n"
             f"💵 Вы получите примерно: {max_rub} руб ≈ {max_usdt} USDT\n\n"
-            f"{explanation}\n\n"
             f"<i>Введите число от 10 до {real_balance}.</i>"
         ),
         parse_mode="HTML",

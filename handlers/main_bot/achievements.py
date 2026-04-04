@@ -14,7 +14,7 @@ async def check_achievements(user_id: int, bot: Bot):
      agreed, has_started, referral_count, referral_earnings,
      current_win_streak, max_win_streak, withdrawals_count) = user
 
-    # Получаем существующие достижения
+    # Получаем существующие достижения из PostgreSQL
     rows = await execute_query(
         "SELECT achievement_id FROM achievements WHERE user_id = $1",
         user_id, fetch_all=True
@@ -67,12 +67,12 @@ async def check_achievements(user_id: int, bot: Bot):
         for ach_id, name, prize in new_achievements:
             try:
                 await execute_query(
-                    "INSERT INTO achievements (user_id, achievement_id) VALUES ($1, $2)",
+                    "INSERT INTO achievements (user_id, achievement_id) VALUES ($1, $2) ON CONFLICT (user_id, achievement_id) DO NOTHING",
                     user_id, ach_id
                 )
                 total_bonus += prize
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Ошибка добавления достижения {ach_id}: {e}")
         if total_bonus > 0:
             await execute_query(
                 "UPDATE users SET balance = balance + $1 WHERE user_id = $2",
