@@ -12,7 +12,7 @@ from database import (
     get_user, get_user_stats, update_balance, claim_daily_bonus,
     get_bonus_total, set_user_started, log_agreement,
     increment_referral_count, increment_withdrawals_count,
-    create_withdraw_request, get_demo_games_played,
+    create_withdraw_request, get_demo_games_played, reset_demo_games_played,
     get_daily_withdrawn, get_last_deposit_time, get_pending_withdraw_count,
     get_daily_total_withdrawn_rub, get_bonus_wagering_status, update_bonus_wagered,
     execute_query, DB_NAME
