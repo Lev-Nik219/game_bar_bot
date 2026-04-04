@@ -16,8 +16,8 @@ from states import CustomDepositStates
 logger = logging.getLogger(__name__)
 router = Router()
 
-# Словарь для блокировки повторных нажатий
-processing_payments = set()
+# Словарь для блокировки повторных нажатий (временная блокировка)
+processing_payments = {}
 
 @router.callback_query(F.data == "deposit")
 async def deposit_callback(callback: types.CallbackQuery):
@@ -29,7 +29,7 @@ async def deposit_callback(callback: types.CallbackQuery):
         "💰 Выберите сумму пополнения.\n\n"
         "Оплата в криптовалюте USDT по текущему курсу.\n"
         "После оплаты нажмите «Я оплатил» для зачисления баллов.\n\n"
-        "⚠️ ВНИМАНИЕ: Кнопку «Я оплатил» можно нажать только ОДИН раз!",
+        "⚠️ ВНИМАНИЕ: Кнопку «Я оплатил» можно нажать ТОЛЬКО ОДИН раз!",
         reply_markup=deposit_keyboard()
     )
 
@@ -69,9 +69,9 @@ async def process_deposit(callback: types.CallbackQuery):
 
         await create_crypto_transaction(user_id, amount_rub, amount_points, payment_id, invoice_id)
 
-        # Клавиатура с кнопкой "Я оплатил" (только один раз)
+        # Клавиатура с кнопкой "Я оплатил"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Я оплатил (только 1 раз)", callback_data=f"check_payment_{payment_id}")],
+            [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
         ])
 
@@ -145,7 +145,7 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         await state.clear()
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Я оплатил (только 1 раз)", callback_data=f"check_payment_{payment_id}")],
+            [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
         ])
         
@@ -168,13 +168,20 @@ async def check_payment(callback: types.CallbackQuery):
     payment_id = callback.data.replace("check_payment_", "")
     user_id = callback.from_user.id
     
-    # Блокируем повторные нажатия
+    # Блокируем повторные нажатия (с таймаутом 30 секунд)
     lock_key = f"{user_id}_{payment_id}"
-    if lock_key in processing_payments:
-        await callback.answer("⏳ Платёж уже обрабатывается. Пожалуйста, подождите...", show_alert=True)
-        return
+    current_time = time.time()
     
-    processing_payments.add(lock_key)
+    if lock_key in processing_payments:
+        last_click = processing_payments[lock_key]
+        if current_time - last_click < 30:
+            await callback.answer("⏳ Платёж уже обрабатывается. Пожалуйста, подождите...", show_alert=True)
+            return
+        else:
+            # Удаляем просроченную блокировку
+            del processing_payments[lock_key]
+    
+    processing_payments[lock_key] = current_time
     
     try:
         await callback.answer()
@@ -192,26 +199,41 @@ async def check_payment(callback: types.CallbackQuery):
         amount_points, status, invoice_id, created_at = row
         created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(created_at))
         
-        # Если уже оплачено - показываем информацию и УДАЛЯЕМ КНОПКУ
+        # Если уже оплачено - удаляем кнопку и показываем информацию
         if status == 'paid':
+            # Получаем подтверждённое время
             confirmed_row = await execute_query(
                 "SELECT confirmed_at FROM crypto_transactions WHERE payment_id = $1",
                 payment_id, fetch_one=True
             )
             confirmed_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(confirmed_row[0])) if confirmed_row and confirmed_row[0] else created_date
             
-            # Удаляем кнопку - показываем только информацию
+            # Удаляем кнопку - заменяем сообщение
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
             ])
-            await callback.message.edit_text(
-                f"✅ <b>Платёж уже был зачислен ранее!</b>\n\n"
-                f"📅 Дата оплаты: {confirmed_date}\n"
-                f"💰 Сумма: {amount_points} баллов\n\n"
-                f"Повторное начисление невозможно.",
-                parse_mode="HTML",
-                reply_markup=keyboard
-            )
+            try:
+                await callback.message.edit_text(
+                    f"✅ <b>Платёж уже был зачислен ранее!</b>\n\n"
+                    f"📅 Дата оплаты: {confirmed_date}\n"
+                    f"💰 Сумма: {amount_points} баллов\n\n"
+                    f"Повторное начисление невозможно.",
+                    parse_mode="HTML",
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                # Если не удалось отредактировать, пытаемся удалить старое сообщение и отправить новое
+                try:
+                    await callback.message.delete()
+                    await callback.message.answer(
+                        f"✅ <b>Платёж уже был зачислен ранее!</b>\n\n"
+                        f"📅 Дата оплаты: {confirmed_date}\n"
+                        f"💰 Сумма: {amount_points} баллов",
+                        parse_mode="HTML",
+                        reply_markup=keyboard
+                    )
+                except:
+                    pass
             return
         
         # Проверяем статус в CryptoPay
@@ -266,22 +288,38 @@ async def check_payment(callback: types.CallbackQuery):
 
                 await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
 
-                # Удаляем кнопку "Я оплатил" - показываем только результат
+                # УДАЛЯЕМ КНОПКУ "Я ОПЛАТИЛ" - заменяем сообщение
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
                 ])
 
-                await callback.message.edit_text(
-                    f"✅ <b>Оплата подтверждена!</b>\n\n"
-                    f"📅 Дата оплаты: {paid_date}\n"
-                    f"💰 Начислено: {amount_points} баллов\n"
-                    f"💎 Новый баланс: {new_balance} баллов{bonus_text}\n\n"
-                    f"Нажмите на кнопку ниже, чтобы вернуться в главное меню:",
-                    parse_mode="HTML",
-                    reply_markup=keyboard
-                )
+                try:
+                    # Пытаемся отредактировать существующее сообщение
+                    await callback.message.edit_text(
+                        f"✅ <b>Оплата подтверждена!</b>\n\n"
+                        f"📅 Дата оплаты: {paid_date}\n"
+                        f"💰 Начислено: {amount_points} баллов\n"
+                        f"💎 Новый баланс: {new_balance} баллов{bonus_text}\n\n"
+                        f"Нажмите на кнопку ниже, чтобы вернуться в главное меню:",
+                        parse_mode="HTML",
+                        reply_markup=keyboard
+                    )
+                except Exception as e:
+                    # Если не удалось отредактировать (сообщение могло быть удалено)
+                    try:
+                        await callback.message.delete()
+                        await callback.message.answer(
+                            f"✅ <b>Оплата подтверждена!</b>\n\n"
+                            f"📅 Дата оплаты: {paid_date}\n"
+                            f"💰 Начислено: {amount_points} баллов\n"
+                            f"💎 Новый баланс: {new_balance} баллов{bonus_text}",
+                            parse_mode="HTML",
+                            reply_markup=keyboard
+                        )
+                    except:
+                        pass
                 
-                # Отправляем дополнительное уведомление в чат
+                # Отправляем дополнительное уведомление
                 await callback.bot.send_message(
                     user_id,
                     f"✅ Платёж успешно зачислен!\n"
@@ -292,7 +330,7 @@ async def check_payment(callback: types.CallbackQuery):
                     ])
                 )
             else:
-                # Платёж не оплачен - показываем предупреждение, но кнопку оставляем
+                # Платёж не оплачен - показываем предупреждение
                 await callback.answer(
                     "❌ Платёж ещё не оплачен.\n\n"
                     "1. Оплатите по ссылке\n"
@@ -305,5 +343,8 @@ async def check_payment(callback: types.CallbackQuery):
             logger.error(f"Ошибка при проверке платежа: {e}")
             await callback.answer(f"❌ Ошибка проверки: {str(e)[:50]}", show_alert=True)
     finally:
-        # Снимаем блокировку
-        processing_payments.discard(lock_key)
+        # Снимаем блокировку через 5 секунд (чтобы избежать залипания)
+        async def remove_lock():
+            await asyncio.sleep(5)
+            processing_payments.pop(lock_key, None)
+        asyncio.create_task(remove_lock())
