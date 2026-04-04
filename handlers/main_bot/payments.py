@@ -159,20 +159,32 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка при создании платежа: {str(e)}")
         await state.clear()
 
-# ===== НОВАЯ СИСТЕМА КНОПКИ "Я ОПЛАТИЛ" =====
+# ===== НОВАЯ СИСТЕМА КНОПКИ "Я ОПЛАТИЛ" - СРАЗУ УДАЛЯЕМ КНОПКУ =====
 @router.callback_query(F.data.startswith("pay_"))
 async def process_payment_click(callback: types.CallbackQuery):
     payment_id = callback.data.replace("pay_", "")
     user_id = callback.from_user.id
-    message_id = callback.message.message_id
     chat_id = callback.message.chat.id
+    message_id = callback.message.message_id
     
-    # 1. Проверяем, не обработан ли уже этот платёж
-    if payment_id in processed_payments:
-        await callback.answer("❌ Этот платёж уже обработан!", show_alert=True)
-        
-        # Удаляем кнопку, отправив новое сообщение
+    # Показываем уведомление о начале обработки
+    await callback.answer("⏳ Обрабатываю платеж...", show_alert=False)
+    
+    # 1. СРАЗУ УДАЛЯЕМ СООБЩЕНИЕ С КНОПКОЙ (чтобы нельзя было нажать повторно)
+    try:
         await callback.bot.delete_message(chat_id, message_id)
+    except Exception as e:
+        logger.error(f"Не удалось удалить сообщение: {e}")
+    
+    # Отправляем временное сообщение о проверке
+    temp_msg = await callback.bot.send_message(
+        chat_id,
+        "⏳ Проверяю статус платежа. Пожалуйста, подождите..."
+    )
+    
+    # 2. Проверяем, не обработан ли уже этот платёж
+    if payment_id in processed_payments:
+        await temp_msg.delete()
         await callback.bot.send_message(
             chat_id,
             "⚠️ Этот платёж уже был обработан ранее.\n\nПовторное начисление невозможно.",
@@ -182,23 +194,29 @@ async def process_payment_click(callback: types.CallbackQuery):
         )
         return
     
-    # 2. Получаем транзакцию
+    # 3. Получаем транзакцию
     row = await execute_query(
         "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = $1",
         payment_id, fetch_one=True
     )
     
     if not row:
-        await callback.answer("❌ Транзакция не найдена", show_alert=True)
+        await temp_msg.delete()
+        await callback.bot.send_message(
+            chat_id,
+            "❌ Транзакция не найдена",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
+            ])
+        )
         return
     
     amount_points, status, invoice_id = row
     
-    # 3. Если уже оплачено в БД
+    # 4. Если уже оплачено в БД
     if status == 'paid':
         processed_payments.add(payment_id)
-        await callback.answer("❌ Этот платёж уже был обработан!", show_alert=True)
-        await callback.bot.delete_message(chat_id, message_id)
+        await temp_msg.delete()
         await callback.bot.send_message(
             chat_id,
             f"✅ Платёж на {amount_points} баллов уже был зачислен ранее.\n\nПовторное начисление невозможно.",
@@ -208,18 +226,30 @@ async def process_payment_click(callback: types.CallbackQuery):
         )
         return
     
-    # 4. Проверяем статус в CryptoPay
-    await callback.answer("⏳ Проверяем статус платежа...", show_alert=False)
-    
+    # 5. Проверяем статус в CryptoPay
     try:
         response = await crypto_pay_service.get_invoice(int(invoice_id))
         if not response.get('ok'):
-            await callback.answer("❌ Ошибка проверки", show_alert=True)
+            await temp_msg.delete()
+            await callback.bot.send_message(
+                chat_id,
+                "❌ Ошибка проверки платежа. Попробуйте позже.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
+                ])
+            )
             return
         
         items = response.get('result', {}).get('items', [])
         if not items:
-            await callback.answer("❌ Инвойс не найден", show_alert=True)
+            await temp_msg.delete()
+            await callback.bot.send_message(
+                chat_id,
+                "❌ Инвойс не найден.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
+                ])
+            )
             return
         
         invoice = items[0]
@@ -228,7 +258,7 @@ async def process_payment_click(callback: types.CallbackQuery):
         if invoice_status == 'paid':
             paid_at = invoice.get('paid_at') or int(time.time())
             
-            # 5. НАЧИСЛЯЕМ БАЛЛЫ
+            # 6. НАЧИСЛЯЕМ БАЛЛЫ
             balance = await execute_query("SELECT balance FROM users WHERE user_id = $1", user_id, fetch_val=True) or 0
             new_balance = balance + amount_points
             
@@ -258,13 +288,10 @@ async def process_payment_click(callback: types.CallbackQuery):
             
             await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
             
-            # 6. УДАЛЯЕМ СООБЩЕНИЕ С КНОПКОЙ (ГЛАВНОЕ РЕШЕНИЕ!)
-            try:
-                await callback.bot.delete_message(chat_id, message_id)
-            except Exception as e:
-                logger.error(f"Не удалось удалить сообщение: {e}")
+            # 7. Удаляем временное сообщение
+            await temp_msg.delete()
             
-            # 7. ОТПРАВЛЯЕМ НОВОЕ СООБЩЕНИЕ БЕЗ КНОПКИ
+            # 8. Отправляем сообщение об успехе
             paid_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(paid_at))
             
             await callback.bot.send_message(
@@ -281,19 +308,31 @@ async def process_payment_click(callback: types.CallbackQuery):
                 ])
             )
             
-            # 8. Добавляем в список обработанных
+            # 9. Добавляем в список обработанных
             processed_payments.add(payment_id)
-            await callback.answer("✅ Баланс успешно пополнен!", show_alert=True)
             
         else:
-            await callback.answer(
+            # Платёж не оплачен - сообщаем об этом
+            await temp_msg.delete()
+            await callback.bot.send_message(
+                chat_id,
                 "❌ Платёж не найден или не оплачен.\n\n"
                 "1. Оплатите по ссылке\n"
                 "2. Вернитесь в бота\n"
-                "3. Нажмите «Я оплатил» снова",
-                show_alert=True
+                "3. Начните пополнение заново",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="💰 Пополнить снова", callback_data="deposit")],
+                    [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
+                ])
             )
             
     except Exception as e:
         logger.error(f"Ошибка при проверке платежа: {e}")
-        await callback.answer(f"❌ Ошибка: {str(e)[:50]}", show_alert=True)
+        await temp_msg.delete()
+        await callback.bot.send_message(
+            chat_id,
+            f"❌ Ошибка проверки платежа: {str(e)[:100]}\n\nПопробуйте позже или обратитесь к администратору.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
+            ])
+        )
