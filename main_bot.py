@@ -59,7 +59,6 @@ dp.include_router(fallback_router)
 
 @dp.errors()
 async def global_error_handler(event: types.ErrorEvent):
-    """Глобальный обработчик ошибок"""
     logger.error(f"Глобальная ошибка: {event.exception}", exc_info=True)
     return True
 
@@ -74,13 +73,11 @@ async def on_startup():
     logger.info("База данных готова, команды установлены, бот запущен.")
 
 async def main():
-    # Запускаем healthcheck сервер в отдельном потоке
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
     
     await asyncio.sleep(1)
     
-    # Сбрасываем вебхук при старте
     await bot.delete_webhook()
     
     dp.startup.register(on_startup)

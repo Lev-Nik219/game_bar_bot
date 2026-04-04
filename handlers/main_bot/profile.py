@@ -321,7 +321,7 @@ async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_t
     if real_balance < 10:
         return False, f"❌ Минимальная сумма вывода — 10 баллов. Доступно: {real_balance} баллов."
     
-    if amount > real_balance:
+    if amount > real_balance and amount > 0:
         return False, f"❌ Недостаточно средств. Доступно: {real_balance} баллов."
     
     if total_games < MIN_GAMES_BEFORE_WITHDRAW:

@@ -1,7 +1,5 @@
 import asyncio
 import logging
-import aiosqlite
-import aiohttp
 import time
 from uuid import uuid4
 from aiogram import Router, types, F
@@ -9,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from database import get_user, update_balance, add_deposit, create_crypto_transaction, execute_query
-from keyboards import profile_keyboard, deposit_keyboard, payment_confirmation_keyboard
+from keyboards import profile_keyboard, deposit_keyboard
 from config import CRYPTOBOT_TOKEN
 from services.crypto_pay import crypto_pay_service
 from services.referral import award_referral_deposit_bonus
@@ -67,7 +65,6 @@ async def process_deposit(callback: types.CallbackQuery):
 
         await create_crypto_transaction(user_id, amount_rub, amount_points, payment_id, invoice_id)
 
-        # Клавиатура с кнопкой "Я оплатил"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_payment_{payment_id}")],
             [InlineKeyboardButton(text="🔙 Назад", callback_data="deposit")]
@@ -165,10 +162,11 @@ async def check_payment(callback: types.CallbackQuery):
 
     payment_id = callback.data.replace("check_payment_", "")
     user_id = callback.from_user.id
+    now = time.time()
 
     # Получаем транзакцию из PostgreSQL
     row = await execute_query(
-        "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = $1",
+        "SELECT amount_points, status, invoice_id, created_at FROM crypto_transactions WHERE payment_id = $1",
         payment_id, fetch_one=True
     )
     
@@ -176,10 +174,29 @@ async def check_payment(callback: types.CallbackQuery):
         await callback.answer("❌ Транзакция не найдена", show_alert=True)
         return
     
-    amount_points, status, invoice_id = row
+    amount_points, status, invoice_id, created_at = row
+    created_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(created_at))
     
     if status == 'paid':
-        await callback.answer("✅ Платёж уже был зачислен ранее", show_alert=True)
+        # Получаем время подтверждения
+        confirmed_row = await execute_query(
+            "SELECT confirmed_at FROM crypto_transactions WHERE payment_id = $1",
+            payment_id, fetch_one=True
+        )
+        confirmed_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(confirmed_row[0])) if confirmed_row and confirmed_row[0] else created_date
+        
+        # Показываем информацию об уже зачисленном платеже
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Вернуться в меню", callback_data="back_to_menu")]
+        ])
+        await callback.message.edit_text(
+            f"✅ <b>Платёж уже был зачислен ранее!</b>\n\n"
+            f"📅 Дата оплаты: {confirmed_date}\n"
+            f"💰 Сумма: {amount_points} баллов\n\n"
+            f"Нажмите на кнопку ниже, чтобы вернуться в главное меню:",
+            parse_mode="HTML",
+            reply_markup=keyboard
+        )
         return
 
     try:
@@ -196,6 +213,7 @@ async def check_payment(callback: types.CallbackQuery):
 
         invoice = items[0]
         invoice_status = invoice.get('status')
+        paid_at = invoice.get('paid_at') or int(time.time())
 
         if invoice_status == 'paid':
             # Получаем текущий баланс
@@ -207,9 +225,11 @@ async def check_payment(callback: types.CallbackQuery):
             await execute_query("UPDATE users SET balance = $1 WHERE user_id = $2", new_balance, user_id)
             await execute_query(
                 "UPDATE crypto_transactions SET status = 'paid', confirmed_at = $1 WHERE payment_id = $2",
-                int(time.time()), payment_id
+                int(paid_at), payment_id
             )
-            await execute_query("INSERT INTO deposits (user_id, amount) VALUES ($1, $2)", user_id, amount_points)
+            await add_deposit(user_id, amount_points)
+
+            paid_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(paid_at))
 
             # Бонус за первый депозит (+50%)
             first_deposit_claimed = await execute_query(
@@ -217,6 +237,7 @@ async def check_payment(callback: types.CallbackQuery):
                 user_id, fetch_val=True
             )
             
+            bonus_text = ""
             if not first_deposit_claimed:
                 bonus_amount = int(amount_points * 0.5)
                 await execute_query(
@@ -225,14 +246,7 @@ async def check_payment(callback: types.CallbackQuery):
                     bonus_amount, user_id
                 )
                 new_balance += bonus_amount
-                
-                await callback.bot.send_message(
-                    user_id,
-                    f"🎁 <b>Бонус за первый депозит!</b>\n\n"
-                    f"Вы получили +50% бонусных баллов: {bonus_amount} баллов!\n\n"
-                    f"🎲 Отыграйте их с вейджером 3x, чтобы вывести.",
-                    parse_mode="HTML"
-                )
+                bonus_text = f"\n\n🎁 <b>Бонус за первый депозит: +{bonus_amount} баллов!</b>\n🎲 Отыграйте с вейджером 3x."
 
             await award_referral_deposit_bonus(user_id, amount_points, callback.bot)
 
@@ -242,8 +256,9 @@ async def check_payment(callback: types.CallbackQuery):
 
             await callback.message.edit_text(
                 f"✅ <b>Оплата подтверждена!</b>\n\n"
+                f"📅 Дата оплаты: {paid_date}\n"
                 f"💰 Начислено: {amount_points} баллов\n"
-                f"💎 Новый баланс: {new_balance} баллов\n\n"
+                f"💎 Новый баланс: {new_balance} баллов{bonus_text}\n\n"
                 f"Нажмите на кнопку ниже, чтобы вернуться в главное меню:",
                 parse_mode="HTML",
                 reply_markup=keyboard
