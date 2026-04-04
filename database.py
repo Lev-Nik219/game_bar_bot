@@ -3,7 +3,7 @@ import asyncio
 import time
 import random
 import os
-from typing import Optional, Tuple, List, Any, Dict
+from typing import Optional, Tuple, List, Any
 
 # Получаем URL базы данных из переменных окружения Render
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
@@ -68,7 +68,6 @@ async def create_db():
     """Создаёт все необходимые таблицы в PostgreSQL."""
     pool = await init_db_pool()
     async with pool.acquire() as conn:
-        # Таблица users
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -103,27 +102,16 @@ async def create_db():
             )
         ''')
         
-        # Добавляем колонку first_deposit_bonus_claimed, если её нет (для старых таблиц)
-        try:
-            await conn.execute('''
-                ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_bonus_claimed INTEGER DEFAULT 0
-            ''')
-        except Exception as e:
-            print(f"⚠️ Колонка first_deposit_bonus_claimed уже существует или ошибка: {e}")
-        
-        # Достижения
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS achievements (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL,
                 achievement_id TEXT NOT NULL,
                 achieved_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
-                UNIQUE(user_id, achievement_id),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                UNIQUE(user_id, achievement_id)
             )
         ''')
         
-        # Турниры
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS tournaments (
                 id SERIAL PRIMARY KEY,
@@ -139,7 +127,6 @@ async def create_db():
             )
         ''')
         
-        # Участники турниров
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS tournament_participants (
                 tournament_id INTEGER NOT NULL,
@@ -147,13 +134,10 @@ async def create_db():
                 score INTEGER DEFAULT 0,
                 registered INTEGER DEFAULT 0,
                 last_update INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
-                PRIMARY KEY (tournament_id, user_id),
-                FOREIGN KEY (tournament_id) REFERENCES tournaments(id),
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                PRIMARY KEY (tournament_id, user_id)
             )
         ''')
         
-        # Крипто-транзакции
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS crypto_transactions (
                 id SERIAL PRIMARY KEY,
@@ -164,12 +148,10 @@ async def create_db():
                 invoice_id TEXT,
                 status TEXT DEFAULT 'pending',
                 created_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
-                confirmed_at INTEGER,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                confirmed_at INTEGER
             )
         ''')
         
-        # Заявки на вывод
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS withdraw_requests (
                 id SERIAL PRIMARY KEY,
@@ -180,12 +162,10 @@ async def create_db():
                 status TEXT DEFAULT 'pending',
                 created_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
                 completed_at INTEGER,
-                admin_comment TEXT,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                admin_comment TEXT
             )
         ''')
         
-        # Таблица согласий
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS agreements (
                 user_id BIGINT PRIMARY KEY,
@@ -195,18 +175,15 @@ async def create_db():
             )
         ''')
         
-        # Депозиты
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS deposits (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT NOT NULL,
                 amount INTEGER NOT NULL,
-                created_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                created_at INTEGER DEFAULT EXTRACT(EPOCH FROM NOW())::INTEGER
             )
         ''')
         
-        # События (множители)
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS events (
                 id SERIAL PRIMARY KEY,
@@ -218,7 +195,6 @@ async def create_db():
             )
         ''')
         
-        # История игр для кэшбека
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS game_history (
                 id SERIAL PRIMARY KEY,
@@ -226,8 +202,7 @@ async def create_db():
                 game_type TEXT NOT NULL,
                 bet_amount INTEGER NOT NULL,
                 win_amount INTEGER DEFAULT 0,
-                played_at INTEGER NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                played_at INTEGER NOT NULL
             )
         ''')
         
@@ -261,13 +236,8 @@ async def get_user(user_id: int, username: str = None, initial_balance: int = 0)
     return await execute_with_retry(_get_user)
 
 async def get_bonus_total(user_id: int) -> int:
-    async def _get():
-        val = await execute_query(
-            "SELECT bonus_total FROM users WHERE user_id = $1",
-            user_id, fetch_val=True
-        )
-        return val if val else 0
-    return await execute_with_retry(_get)
+    val = await execute_query("SELECT bonus_total FROM users WHERE user_id = $1", user_id, fetch_val=True)
+    return val if val else 0
 
 async def claim_daily_bonus(user_id: int) -> Tuple[bool, int]:
     async def _claim():
@@ -281,26 +251,15 @@ async def claim_daily_bonus(user_id: int) -> Tuple[bool, int]:
             now, user_id, today_start
         )
         if result and 'UPDATE 1' in result:
-            new_balance = await execute_query(
-                "SELECT balance FROM users WHERE user_id = $1",
-                user_id, fetch_val=True
-            )
+            new_balance = await execute_query("SELECT balance FROM users WHERE user_id = $1", user_id, fetch_val=True)
             return True, new_balance
         else:
-            balance = await execute_query(
-                "SELECT balance FROM users WHERE user_id = $1",
-                user_id, fetch_val=True
-            )
+            balance = await execute_query("SELECT balance FROM users WHERE user_id = $1", user_id, fetch_val=True)
             return False, balance
     return await execute_with_retry(_claim)
 
 async def update_balance(user_id: int, new_balance: int):
-    async def _update():
-        await execute_query(
-            "UPDATE users SET balance = $1, last_active = $2 WHERE user_id = $3",
-            new_balance, int(time.time()), user_id
-        )
-    await execute_with_retry(_update)
+    await execute_query("UPDATE users SET balance = $1, last_active = $2 WHERE user_id = $3", new_balance, int(time.time()), user_id)
 
 async def update_stats(user_id: int, win: bool) -> bool:
     async def _update():
@@ -335,182 +294,139 @@ async def update_stats(user_id: int, win: bool) -> bool:
     return await execute_with_retry(_update)
 
 async def get_user_stats(user_id: int) -> Optional[Tuple[int, int, int]]:
-    async def _get():
-        row = await execute_query(
-            "SELECT balance, total_games, wins FROM users WHERE user_id = $1",
-            user_id, fetch_one=True
-        )
-        return tuple(row) if row else None
-    return await execute_with_retry(_get)
+    row = await execute_query("SELECT balance, total_games, wins FROM users WHERE user_id = $1", user_id, fetch_one=True)
+    return tuple(row) if row else None
 
 async def get_all_users(offset=0, limit=5, active_days=30) -> List[tuple]:
-    async def _get():
-        if active_days == 0:
-            rows = await execute_query(
-                "SELECT user_id, username, balance, total_games FROM users ORDER BY user_id LIMIT $1 OFFSET $2",
-                limit, offset, fetch_all=True
-            )
-        else:
-            threshold = int(time.time()) - active_days * 86400
-            rows = await execute_query(
-                "SELECT user_id, username, balance, total_games FROM users WHERE last_active > $1 ORDER BY user_id LIMIT $2 OFFSET $3",
-                threshold, limit, offset, fetch_all=True
-            )
-        return [tuple(row) for row in rows] if rows else []
-    return await execute_with_retry(_get)
+    if active_days == 0:
+        rows = await execute_query(
+            "SELECT user_id, username, balance, total_games FROM users ORDER BY user_id LIMIT $1 OFFSET $2",
+            limit, offset, fetch_all=True
+        )
+    else:
+        threshold = int(time.time()) - active_days * 86400
+        rows = await execute_query(
+            "SELECT user_id, username, balance, total_games FROM users WHERE last_active > $1 ORDER BY user_id LIMIT $2 OFFSET $3",
+            threshold, limit, offset, fetch_all=True
+        )
+    return [tuple(row) for row in rows] if rows else []
 
 async def get_users_count(active_days=30) -> int:
-    async def _get():
-        if active_days == 0:
-            val = await execute_query("SELECT COUNT(*) FROM users", fetch_val=True)
-        else:
-            threshold = int(time.time()) - active_days * 86400
-            val = await execute_query("SELECT COUNT(*) FROM users WHERE last_active > $1", threshold, fetch_val=True)
-        return val if val else 0
-    return await execute_with_retry(_get)
+    if active_days == 0:
+        val = await execute_query("SELECT COUNT(*) FROM users", fetch_val=True)
+    else:
+        threshold = int(time.time()) - active_days * 86400
+        val = await execute_query("SELECT COUNT(*) FROM users WHERE last_active > $1", threshold, fetch_val=True)
+    return val if val else 0
 
 async def set_user_agreed(user_id: int):
-    async def _set():
-        await execute_query("UPDATE users SET agreed = 1 WHERE user_id = $1", user_id)
-    await execute_with_retry(_set)
+    await execute_query("UPDATE users SET agreed = 1 WHERE user_id = $1", user_id)
 
 async def is_user_agreed(user_id: int) -> bool:
-    async def _is():
-        val = await execute_query("SELECT agreed FROM users WHERE user_id = $1", user_id, fetch_val=True)
-        return val == 1 if val else False
-    return await execute_with_retry(_is)
+    val = await execute_query("SELECT agreed FROM users WHERE user_id = $1", user_id, fetch_val=True)
+    return val == 1 if val else False
 
 async def set_user_started(user_id: int):
-    async def _set():
-        await execute_query("UPDATE users SET has_started = 1 WHERE user_id = $1", user_id)
-    await execute_with_retry(_set)
+    await execute_query("UPDATE users SET has_started = 1 WHERE user_id = $1", user_id)
 
 async def increment_referral_count(inviter_id: int):
-    async def _inc():
-        await execute_query("UPDATE users SET referral_count = referral_count + 1 WHERE user_id = $1", inviter_id)
-    await execute_with_retry(_inc)
+    await execute_query("UPDATE users SET referral_count = referral_count + 1 WHERE user_id = $1", inviter_id)
 
 async def add_referral_earnings(inviter_id: int, amount: int):
-    async def _add():
-        await execute_query("UPDATE users SET referral_earnings = referral_earnings + $1 WHERE user_id = $2", amount, inviter_id)
-    await execute_with_retry(_add)
+    await execute_query("UPDATE users SET referral_earnings = referral_earnings + $1 WHERE user_id = $2", amount, inviter_id)
 
 async def increment_withdrawals_count(user_id: int):
-    async def _inc():
-        await execute_query("UPDATE users SET withdrawals_count = withdrawals_count + 1 WHERE user_id = $1", user_id)
-    await execute_with_retry(_inc)
+    await execute_query("UPDATE users SET withdrawals_count = withdrawals_count + 1 WHERE user_id = $1", user_id)
 
 async def check_referral_bonus(user_id: int, bot):
     async def _check():
-        async with (await init_db_pool()).acquire() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    "SELECT invited_by FROM users WHERE user_id = $1 AND friend_played = 0",
-                    user_id
-                )
-                if row and row['invited_by'] is not None:
-                    invited_by = row['invited_by']
-                    await conn.execute(
-                        "UPDATE users SET friend_played = 1 WHERE user_id = $1",
-                        user_id
-                    )
-                    await conn.execute(
-                        "UPDATE users SET balance = balance + 30, bonus_total = bonus_total + 30, "
-                        "bonus_balance = bonus_balance + 30 WHERE user_id IN ($1, $2)",
-                        user_id, invited_by
-                    )
-                    try:
-                        await bot.send_message(user_id, "🎉 Поздравляем! Вы сыграли первую игру и получили 30 бонусных баллов!")
-                        await bot.send_message(invited_by, "🎉 Ваш друг сыграл первую игру! Вы получаете 30 бонусных баллов!")
-                    except Exception:
-                        pass
+        row = await execute_query(
+            "SELECT invited_by FROM users WHERE user_id = $1 AND friend_played = 0",
+            user_id, fetch_one=True
+        )
+        if row and row['invited_by'] is not None:
+            invited_by = row['invited_by']
+            await execute_query("UPDATE users SET friend_played = 1 WHERE user_id = $1", user_id)
+            await execute_query(
+                "UPDATE users SET balance = balance + 30, bonus_total = bonus_total + 30, "
+                "bonus_balance = bonus_balance + 30 WHERE user_id IN ($1, $2)",
+                user_id, invited_by
+            )
+            try:
+                await bot.send_message(user_id, "🎉 Поздравляем! Вы сыграли первую игру и получили 30 бонусных баллов!")
+                await bot.send_message(invited_by, "🎉 Ваш друг сыграл первую игру! Вы получаете 30 бонусных баллов!")
+            except Exception:
+                pass
     await execute_with_retry(_check)
 
 async def get_active_tournament() -> Optional[Tuple[int, str, int, int]]:
-    async def _get():
-        now = int(time.time())
-        row = await execute_query(
-            "SELECT id, name, prize_points, end_time FROM tournaments WHERE status = 'active' AND start_time <= $1 AND end_time > $1",
-            now, fetch_one=True
-        )
-        if row:
-            return tuple(row) if row else None
-        
-        row = await execute_query(
-            "SELECT id, name, prize_points, end_time FROM tournaments WHERE status = 'pending' AND start_time <= $1",
-            now, fetch_one=True
-        )
-        if row:
-            await execute_query("UPDATE tournaments SET status = 'active' WHERE id = $1", row[0])
-            return (row[0], row[1], row[2], row[3])
-        
-        return None
-    return await execute_with_retry(_get)
+    now = int(time.time())
+    row = await execute_query(
+        "SELECT id, name, prize_points, end_time FROM tournaments WHERE status = 'active' AND start_time <= $1 AND end_time > $1",
+        now, fetch_one=True
+    )
+    if row:
+        return tuple(row) if row else None
+    
+    row = await execute_query(
+        "SELECT id, name, prize_points, end_time FROM tournaments WHERE status = 'pending' AND start_time <= $1",
+        now, fetch_one=True
+    )
+    if row:
+        await execute_query("UPDATE tournaments SET status = 'active' WHERE id = $1", row[0])
+        return (row[0], row[1], row[2], row[3])
+    
+    return None
 
 async def get_tournament_leaders(tournament_id: int, limit=10) -> List[tuple]:
-    async def _get():
-        rows = await execute_query(
-            "SELECT tp.user_id, u.username, tp.score FROM tournament_participants tp "
-            "JOIN users u ON tp.user_id = u.user_id "
-            "WHERE tp.tournament_id = $1 ORDER BY tp.score DESC LIMIT $2",
-            tournament_id, limit, fetch_all=True
-        )
-        return [tuple(row) for row in rows] if rows else []
-    return await execute_with_retry(_get)
+    rows = await execute_query(
+        "SELECT tp.user_id, u.username, tp.score FROM tournament_participants tp "
+        "JOIN users u ON tp.user_id = u.user_id "
+        "WHERE tp.tournament_id = $1 ORDER BY tp.score DESC LIMIT $2",
+        tournament_id, limit, fetch_all=True
+    )
+    return [tuple(row) for row in rows] if rows else []
 
 async def register_for_tournament(user_id: int, tournament_id: int):
-    async def _reg():
-        await execute_query(
-            "INSERT INTO tournament_participants (tournament_id, user_id, registered) VALUES ($1, $2, 1) "
-            "ON CONFLICT (tournament_id, user_id) DO UPDATE SET registered = 1",
-            tournament_id, user_id
-        )
-    await execute_with_retry(_reg)
+    await execute_query(
+        "INSERT INTO tournament_participants (tournament_id, user_id, registered) VALUES ($1, $2, 1) "
+        "ON CONFLICT (tournament_id, user_id) DO UPDATE SET registered = 1",
+        tournament_id, user_id
+    )
 
 async def is_registered_for_tournament(user_id: int, tournament_id: int) -> bool:
-    async def _is():
-        val = await execute_query(
-            "SELECT registered FROM tournament_participants WHERE tournament_id = $1 AND user_id = $2",
-            tournament_id, user_id, fetch_val=True
-        )
-        return val == 1 if val else False
-    return await execute_with_retry(_is)
+    val = await execute_query(
+        "SELECT registered FROM tournament_participants WHERE tournament_id = $1 AND user_id = $2",
+        tournament_id, user_id, fetch_val=True
+    )
+    return val == 1 if val else False
 
 async def get_user_tournaments(user_id: int, offset: int = 0, limit: int = 5) -> List[tuple]:
-    async def _get():
-        rows = await execute_query(
-            "SELECT t.id, t.name, t.prize_points, t.start_time, t.end_time, tp.score, t.winner_id, t.winner_username "
-            "FROM tournaments t JOIN tournament_participants tp ON t.id = tp.tournament_id "
-            "WHERE tp.user_id = $1 ORDER BY t.start_time DESC LIMIT $2 OFFSET $3",
-            user_id, limit, offset, fetch_all=True
-        )
-        return [tuple(row) for row in rows] if rows else []
-    return await execute_with_retry(_get)
+    rows = await execute_query(
+        "SELECT t.id, t.name, t.prize_points, t.start_time, t.end_time, tp.score, t.winner_id, t.winner_username "
+        "FROM tournaments t JOIN tournament_participants tp ON t.id = tp.tournament_id "
+        "WHERE tp.user_id = $1 ORDER BY t.start_time DESC LIMIT $2 OFFSET $3",
+        user_id, limit, offset, fetch_all=True
+    )
+    return [tuple(row) for row in rows] if rows else []
 
 async def count_user_tournaments(user_id: int) -> int:
-    async def _count():
-        val = await execute_query(
-            "SELECT COUNT(*) FROM tournament_participants WHERE user_id = $1",
-            user_id, fetch_val=True
-        )
-        return val if val else 0
-    return await execute_with_retry(_count)
+    val = await execute_query("SELECT COUNT(*) FROM tournament_participants WHERE user_id = $1", user_id, fetch_val=True)
+    return val if val else 0
 
 async def update_tournament_score(user_id: int, score_gain: int):
-    async def _update():
-        now = int(time.time())
-        row = await execute_query(
-            "SELECT id FROM tournaments WHERE status = 'active' AND start_time <= $1 AND end_time > $1",
-            now, fetch_one=True
+    now = int(time.time())
+    row = await execute_query(
+        "SELECT id FROM tournaments WHERE status = 'active' AND start_time <= $1 AND end_time > $1",
+        now, fetch_one=True
+    )
+    if row:
+        tournament_id = row[0]
+        await execute_query(
+            "INSERT INTO tournament_participants (tournament_id, user_id, score) VALUES ($1, $2, $3) "
+            "ON CONFLICT (tournament_id, user_id) DO UPDATE SET score = score + $3, last_update = $4",
+            tournament_id, user_id, score_gain, now
         )
-        if row:
-            tournament_id = row[0]
-            await execute_query(
-                "INSERT INTO tournament_participants (tournament_id, user_id, score) VALUES ($1, $2, $3) "
-                "ON CONFLICT (tournament_id, user_id) DO UPDATE SET score = score + $3, last_update = $4",
-                tournament_id, user_id, score_gain, now
-            )
-    await execute_with_retry(_update)
 
 async def finish_tournament(tournament_id: int, bot):
     async def _finish():
@@ -553,353 +469,256 @@ async def finish_tournament(tournament_id: int, bot):
     await execute_with_retry(_finish)
 
 async def add_deposit(user_id: int, amount: int):
-    async def _add():
-        await execute_query("INSERT INTO deposits (user_id, amount) VALUES ($1, $2)", user_id, amount)
-    await execute_with_retry(_add)
+    await execute_query("INSERT INTO deposits (user_id, amount) VALUES ($1, $2)", user_id, amount)
 
 async def get_event_multiplier() -> float:
-    async def _get():
-        now = int(time.time())
-        val = await execute_query(
-            "SELECT multiplier FROM events WHERE active = 1 AND start_date <= $1 AND end_date > $1",
-            now, fetch_val=True
-        )
-        return val if val else 1.0
-    return await execute_with_retry(_get)
+    now = int(time.time())
+    val = await execute_query(
+        "SELECT multiplier FROM events WHERE active = 1 AND start_date <= $1 AND end_date > $1",
+        now, fetch_val=True
+    )
+    return val if val else 1.0
 
 async def log_agreement(user_id: int, ip_address: str = None, user_agent: str = None):
-    async def _log():
-        async with (await init_db_pool()).acquire() as conn:
-            async with conn.transaction():
-                await conn.execute(
-                    "INSERT INTO agreements (user_id, agreed_at, ip_address, user_agent) VALUES ($1, $2, $3, $4) "
-                    "ON CONFLICT (user_id) DO UPDATE SET agreed_at = $2, ip_address = $3, user_agent = $4",
-                    user_id, int(time.time()), ip_address, user_agent
-                )
-                await conn.execute("UPDATE users SET agreed = 1 WHERE user_id = $1", user_id)
-    await execute_with_retry(_log)
+    async with (await init_db_pool()).acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO agreements (user_id, agreed_at, ip_address, user_agent) VALUES ($1, $2, $3, $4) "
+                "ON CONFLICT (user_id) DO UPDATE SET agreed_at = $2, ip_address = $3, user_agent = $4",
+                user_id, int(time.time()), ip_address, user_agent
+            )
+            await conn.execute("UPDATE users SET agreed = 1 WHERE user_id = $1", user_id)
 
 async def check_agreement(user_id: int) -> bool:
     return await is_user_agreed(user_id)
 
 async def get_bot_stats() -> dict:
-    async def _get():
-        first_date = await execute_query("SELECT MIN(created_at) FROM users", fetch_val=True)
-        first_date = first_date if first_date else int(time.time())
-        days = (int(time.time()) - first_date) // 86400
-        
-        total_users = await execute_query("SELECT COUNT(*) FROM users", fetch_val=True) or 0
-        
-        now = time.time()
-        today_start = int(now - (now % 86400))
-        new_today = await execute_query("SELECT COUNT(*) FROM users WHERE created_at >= $1", today_start, fetch_val=True) or 0
-        
-        total_games = await execute_query("SELECT SUM(total_games) FROM users", fetch_val=True) or 0
-        
-        total_paid = await execute_query("SELECT SUM(amount_points) FROM withdraw_requests WHERE status='completed'", fetch_val=True) or 0
-        
-        return {
-            "days": days,
-            "total_users": total_users,
-            "new_today": new_today,
-            "total_games": total_games,
-            "total_paid": total_paid
-        }
-    return await execute_with_retry(_get)
+    first_date = await execute_query("SELECT MIN(created_at) FROM users", fetch_val=True)
+    first_date = first_date if first_date else int(time.time())
+    days = (int(time.time()) - first_date) // 86400
+    total_users = await execute_query("SELECT COUNT(*) FROM users", fetch_val=True) or 0
+    now = time.time()
+    today_start = int(now - (now % 86400))
+    new_today = await execute_query("SELECT COUNT(*) FROM users WHERE created_at >= $1", today_start, fetch_val=True) or 0
+    total_games = await execute_query("SELECT SUM(total_games) FROM users", fetch_val=True) or 0
+    total_paid = await execute_query("SELECT SUM(amount_points) FROM withdraw_requests WHERE status='completed'", fetch_val=True) or 0
+    return {"days": days, "total_users": total_users, "new_today": new_today, "total_games": total_games, "total_paid": total_paid}
 
 # ===== Крипто-транзакции =====
 async def create_crypto_transaction(user_id: int, amount_rub: int, amount_points: int, payment_id: str, invoice_id: str):
-    async def _create():
-        await execute_query(
-            "INSERT INTO crypto_transactions (user_id, amount_rub, amount_points, payment_id, invoice_id) VALUES ($1, $2, $3, $4, $5)",
-            user_id, amount_rub, amount_points, payment_id, invoice_id
-        )
-    await execute_with_retry(_create)
+    await execute_query(
+        "INSERT INTO crypto_transactions (user_id, amount_rub, amount_points, payment_id, invoice_id) VALUES ($1, $2, $3, $4, $5)",
+        user_id, amount_rub, amount_points, payment_id, invoice_id
+    )
 
 async def get_crypto_transaction(payment_id: str) -> Optional[Tuple[int, str]]:
-    async def _get():
-        row = await execute_query(
-            "SELECT amount_points, status FROM crypto_transactions WHERE payment_id = $1",
-            payment_id, fetch_one=True
-        )
-        return (row[0], row[1]) if row else None
-    return await execute_with_retry(_get)
+    row = await execute_query(
+        "SELECT amount_points, status FROM crypto_transactions WHERE payment_id = $1",
+        payment_id, fetch_one=True
+    )
+    return (row[0], row[1]) if row else None
 
 async def get_crypto_transaction_full(payment_id: str) -> Optional[Tuple[int, str, str]]:
-    async def _get():
-        row = await execute_query(
-            "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = $1",
-            payment_id, fetch_one=True
-        )
-        return (row[0], row[1], row[2]) if row else None
-    return await execute_with_retry(_get)
+    row = await execute_query(
+        "SELECT amount_points, status, invoice_id FROM crypto_transactions WHERE payment_id = $1",
+        payment_id, fetch_one=True
+    )
+    return (row[0], row[1], row[2]) if row else None
 
 async def update_crypto_transaction_status(payment_id: str, status: str, confirmed_at: int = None):
-    async def _update():
-        if status == 'paid':
-            result = await execute_query(
-                "UPDATE crypto_transactions SET status = $1, confirmed_at = $2 WHERE payment_id = $3 AND status = 'pending'",
-                status, confirmed_at or int(time.time()), payment_id
-            )
-            return 'UPDATE 1' in result
-        else:
-            await execute_query("UPDATE crypto_transactions SET status = $1 WHERE payment_id = $2", status, payment_id)
-            return True
-    return await execute_with_retry(_update)
+    if status == 'paid':
+        result = await execute_query(
+            "UPDATE crypto_transactions SET status = $1, confirmed_at = $2 WHERE payment_id = $3 AND status = 'pending'",
+            status, confirmed_at or int(time.time()), payment_id
+        )
+        return 'UPDATE 1' in result
+    else:
+        await execute_query("UPDATE crypto_transactions SET status = $1 WHERE payment_id = $2", status, payment_id)
+        return True
 
 # ===== Заявки на вывод =====
 async def create_withdraw_request(user_id: int, amount_points: int, amount_usdt: float, wallet_address: str):
-    async def _create():
-        await execute_query(
-            "INSERT INTO withdraw_requests (user_id, amount_points, amount_usdt, wallet_address, status) VALUES ($1, $2, $3, $4, 'pending')",
-            user_id, amount_points, amount_usdt, wallet_address
-        )
-    await execute_with_retry(_create)
+    await execute_query(
+        "INSERT INTO withdraw_requests (user_id, amount_points, amount_usdt, wallet_address, status) VALUES ($1, $2, $3, $4, 'pending')",
+        user_id, amount_points, amount_usdt, wallet_address
+    )
 
 async def get_pending_withdraw_requests() -> List[tuple]:
-    async def _get():
-        rows = await execute_query(
-            "SELECT id, user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE status = 'pending' ORDER BY created_at ASC",
-            fetch_all=True
-        )
-        return [tuple(row) for row in rows] if rows else []
-    return await execute_with_retry(_get)
+    rows = await execute_query(
+        "SELECT id, user_id, amount_points, amount_usdt, wallet_address FROM withdraw_requests WHERE status = 'pending' ORDER BY created_at ASC",
+        fetch_all=True
+    )
+    return [tuple(row) for row in rows] if rows else []
 
 async def get_all_withdraw_requests(offset: int = 0, limit: int = 5) -> List[tuple]:
-    async def _get():
-        rows = await execute_query(
-            "SELECT id, user_id, amount_points, amount_usdt, wallet_address, status, created_at, completed_at "
-            "FROM withdraw_requests ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-            limit, offset, fetch_all=True
-        )
-        return [tuple(row) for row in rows] if rows else []
-    return await execute_with_retry(_get)
+    rows = await execute_query(
+        "SELECT id, user_id, amount_points, amount_usdt, wallet_address, status, created_at, completed_at "
+        "FROM withdraw_requests ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+        limit, offset, fetch_all=True
+    )
+    return [tuple(row) for row in rows] if rows else []
 
 async def count_withdraw_requests(status: str = None) -> int:
-    async def _count():
-        if status:
-            val = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE status = $1", status, fetch_val=True)
-        else:
-            val = await execute_query("SELECT COUNT(*) FROM withdraw_requests", fetch_val=True)
-        return val if val else 0
-    return await execute_with_retry(_count)
+    if status:
+        val = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE status = $1", status, fetch_val=True)
+    else:
+        val = await execute_query("SELECT COUNT(*) FROM withdraw_requests", fetch_val=True)
+    return val if val else 0
 
 async def update_withdraw_request_status(request_id: int, status: str, completed_at: int = None):
-    async def _update():
-        if status == 'completed':
-            await execute_query(
-                "UPDATE withdraw_requests SET status = $1, completed_at = $2 WHERE id = $3",
-                status, completed_at or int(time.time()), request_id
-            )
-        else:
-            await execute_query("UPDATE withdraw_requests SET status = $1 WHERE id = $2", status, request_id)
-    await execute_with_retry(_update)
+    if status == 'completed':
+        await execute_query(
+            "UPDATE withdraw_requests SET status = $1, completed_at = $2 WHERE id = $3",
+            status, completed_at or int(time.time()), request_id
+        )
+    else:
+        await execute_query("UPDATE withdraw_requests SET status = $1 WHERE id = $2", status, request_id)
 
-# ===== Статистика выводов и пополнений =====
+# ===== Статистика =====
 async def get_withdraw_stats() -> dict:
-    async def _get():
-        total_requests = await execute_query("SELECT COUNT(*) FROM withdraw_requests", fetch_val=True) or 0
-        completed_requests = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'completed'", fetch_val=True) or 0
-        rejected_requests = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'rejected'", fetch_val=True) or 0
-        pending_requests = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'", fetch_val=True) or 0
-        completed_amount = await execute_query("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE status = 'completed'", fetch_val=True) or 0
-        completed_amount_usdt = await execute_query("SELECT COALESCE(SUM(amount_usdt), 0) FROM withdraw_requests WHERE status = 'completed'", fetch_val=True) or 0
-        
-        avg_processing_time = await execute_query(
-            "SELECT AVG(completed_at - created_at) / 3600.0 FROM withdraw_requests WHERE status = 'completed' AND completed_at IS NOT NULL",
-            fetch_val=True
-        ) or 0
-        
-        return {
-            "total_requests": total_requests,
-            "completed_requests": completed_requests,
-            "rejected_requests": rejected_requests,
-            "pending_requests": pending_requests,
-            "completed_amount": completed_amount,
-            "completed_amount_usdt": completed_amount_usdt,
-            "completed_amount_rub": round(completed_amount_usdt * 90, 2),
-            "avg_processing_time": avg_processing_time
-        }
-    return await execute_with_retry(_get)
+    total_requests = await execute_query("SELECT COUNT(*) FROM withdraw_requests", fetch_val=True) or 0
+    completed_requests = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'completed'", fetch_val=True) or 0
+    rejected_requests = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'rejected'", fetch_val=True) or 0
+    pending_requests = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE status = 'pending'", fetch_val=True) or 0
+    completed_amount = await execute_query("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE status = 'completed'", fetch_val=True) or 0
+    completed_amount_usdt = await execute_query("SELECT COALESCE(SUM(amount_usdt), 0) FROM withdraw_requests WHERE status = 'completed'", fetch_val=True) or 0
+    avg_processing_time = await execute_query(
+        "SELECT AVG(completed_at - created_at) / 3600.0 FROM withdraw_requests WHERE status = 'completed' AND completed_at IS NOT NULL",
+        fetch_val=True
+    ) or 0
+    return {
+        "total_requests": total_requests,
+        "completed_requests": completed_requests,
+        "rejected_requests": rejected_requests,
+        "pending_requests": pending_requests,
+        "completed_amount": completed_amount,
+        "completed_amount_usdt": completed_amount_usdt,
+        "completed_amount_rub": round(completed_amount_usdt * 90, 2),
+        "avg_processing_time": avg_processing_time
+    }
 
 async def get_deposit_stats() -> dict:
-    async def _get():
-        total_deposits = await execute_query("SELECT COUNT(*) FROM crypto_transactions", fetch_val=True) or 0
-        successful = await execute_query("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'paid'", fetch_val=True) or 0
-        pending = await execute_query("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'pending'", fetch_val=True) or 0
-        failed = await execute_query("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'failed'", fetch_val=True) or 0
-        total_amount = await execute_query("SELECT COALESCE(SUM(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'", fetch_val=True) or 0
-        avg_amount = await execute_query("SELECT COALESCE(AVG(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'", fetch_val=True) or 0
-        max_amount = await execute_query("SELECT COALESCE(MAX(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'", fetch_val=True) or 0
-        
-        return {
-            "total_deposits": total_deposits,
-            "successful": successful,
-            "pending": pending,
-            "failed": failed,
-            "total_amount": total_amount,
-            "total_amount_rub": round(total_amount / 1.5, 2),
-            "total_amount_usdt": round(total_amount / 1.5 / 90, 2),
-            "avg_amount": avg_amount,
-            "max_amount": max_amount
-        }
-    return await execute_with_retry(_get)
+    total_deposits = await execute_query("SELECT COUNT(*) FROM crypto_transactions", fetch_val=True) or 0
+    successful = await execute_query("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'paid'", fetch_val=True) or 0
+    pending = await execute_query("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'pending'", fetch_val=True) or 0
+    failed = await execute_query("SELECT COUNT(*) FROM crypto_transactions WHERE status = 'failed'", fetch_val=True) or 0
+    total_amount = await execute_query("SELECT COALESCE(SUM(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'", fetch_val=True) or 0
+    avg_amount = await execute_query("SELECT COALESCE(AVG(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'", fetch_val=True) or 0
+    max_amount = await execute_query("SELECT COALESCE(MAX(amount_points), 0) FROM crypto_transactions WHERE status = 'paid'", fetch_val=True) or 0
+    return {
+        "total_deposits": total_deposits,
+        "successful": successful,
+        "pending": pending,
+        "failed": failed,
+        "total_amount": total_amount,
+        "total_amount_rub": round(total_amount / 1.5, 2),
+        "total_amount_usdt": round(total_amount / 1.5 / 90, 2),
+        "avg_amount": avg_amount,
+        "max_amount": max_amount
+    }
 
 async def get_user_withdraw_stats(user_id: int) -> dict:
-    async def _get():
-        count = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1", user_id, fetch_val=True) or 0
-        total = await execute_query("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE user_id = $1", user_id, fetch_val=True) or 0
-        completed = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'completed'", user_id, fetch_val=True) or 0
-        completed_amount = await execute_query("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE user_id = $1 AND status = 'completed'", user_id, fetch_val=True) or 0
-        pending = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'", user_id, fetch_val=True) or 0
-        
-        return {
-            "count": count,
-            "total": total,
-            "completed": completed,
-            "completed_amount": completed_amount,
-            "pending": pending
-        }
-    return await execute_with_retry(_get)
+    count = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1", user_id, fetch_val=True) or 0
+    total = await execute_query("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE user_id = $1", user_id, fetch_val=True) or 0
+    completed = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'completed'", user_id, fetch_val=True) or 0
+    completed_amount = await execute_query("SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests WHERE user_id = $1 AND status = 'completed'", user_id, fetch_val=True) or 0
+    pending = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'", user_id, fetch_val=True) or 0
+    return {
+        "count": count,
+        "total": total,
+        "completed": completed,
+        "completed_amount": completed_amount,
+        "pending": pending
+    }
 
 async def get_user_deposit_stats(user_id: int) -> dict:
-    async def _get():
-        count = await execute_query("SELECT COUNT(*) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id, fetch_val=True) or 0
-        total = await execute_query("SELECT COALESCE(SUM(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id, fetch_val=True) or 0
-        avg = await execute_query("SELECT COALESCE(AVG(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id, fetch_val=True) or 0
-        max_val = await execute_query("SELECT COALESCE(MAX(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id, fetch_val=True) or 0
-        
-        return {
-            "count": count,
-            "total": total,
-            "avg": avg,
-            "max": max_val
-        }
-    return await execute_with_retry(_get)
+    count = await execute_query("SELECT COUNT(*) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id, fetch_val=True) or 0
+    total = await execute_query("SELECT COALESCE(SUM(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id, fetch_val=True) or 0
+    avg = await execute_query("SELECT COALESCE(AVG(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id, fetch_val=True) or 0
+    max_val = await execute_query("SELECT COALESCE(MAX(amount_points), 0) FROM crypto_transactions WHERE user_id = $1 AND status = 'paid'", user_id, fetch_val=True) or 0
+    return {"count": count, "total": total, "avg": avg, "max": max_val}
 
 # ===== Демо-режим =====
 async def get_demo_games_played(user_id: int) -> int:
-    async def _get():
-        val = await execute_query("SELECT demo_games_played FROM users WHERE user_id = $1", user_id, fetch_val=True)
-        return val if val else 0
-    return await execute_with_retry(_get)
+    val = await execute_query("SELECT demo_games_played FROM users WHERE user_id = $1", user_id, fetch_val=True)
+    return val if val else 0
 
 async def increment_demo_games_played(user_id: int) -> bool:
-    async def _inc():
-        result = await execute_query(
-            "UPDATE users SET demo_games_played = demo_games_played + 1 WHERE user_id = $1 AND demo_games_played < 5",
-            user_id
-        )
-        return 'UPDATE 1' in result
-    return await execute_with_retry(_inc)
+    result = await execute_query(
+        "UPDATE users SET demo_games_played = demo_games_played + 1 WHERE user_id = $1 AND demo_games_played < 5",
+        user_id
+    )
+    return 'UPDATE 1' in result
 
 async def reset_demo_games_played(user_id: int):
-    async def _reset():
-        await execute_query("UPDATE users SET demo_games_played = 0 WHERE user_id = $1", user_id)
-    await execute_with_retry(_reset)
+    await execute_query("UPDATE users SET demo_games_played = 0 WHERE user_id = $1", user_id)
 
 # ===== Защитные механизмы =====
 async def get_daily_withdrawn(user_id: int) -> int:
-    async def _get():
-        today_start = int(time.time()) - (int(time.time()) % 86400)
-        val = await execute_query(
-            "SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests "
-            "WHERE user_id = $1 AND status='completed' AND completed_at >= $2",
-            user_id, today_start, fetch_val=True
-        )
-        return val if val else 0
-    return await execute_with_retry(_get)
+    today_start = int(time.time()) - (int(time.time()) % 86400)
+    val = await execute_query(
+        "SELECT COALESCE(SUM(amount_points), 0) FROM withdraw_requests "
+        "WHERE user_id = $1 AND status='completed' AND completed_at >= $2",
+        user_id, today_start, fetch_val=True
+    )
+    return val if val else 0
 
 async def get_last_deposit_time(user_id: int) -> int:
-    async def _get():
-        val = await execute_query(
-            "SELECT MAX(created_at) FROM deposits WHERE user_id = $1",
-            user_id, fetch_val=True
-        )
-        return val if val else 0
-    return await execute_with_retry(_get)
+    val = await execute_query("SELECT MAX(created_at) FROM deposits WHERE user_id = $1", user_id, fetch_val=True)
+    return val if val else 0
 
 async def get_pending_withdraw_count(user_id: int) -> int:
-    async def _get():
-        val = await execute_query(
-            "SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'",
-            user_id, fetch_val=True
-        )
-        return val if val else 0
-    return await execute_with_retry(_get)
+    val = await execute_query("SELECT COUNT(*) FROM withdraw_requests WHERE user_id = $1 AND status = 'pending'", user_id, fetch_val=True)
+    return val if val else 0
 
 async def get_daily_total_withdrawn_rub() -> float:
-    async def _get():
-        today_start = int(time.time()) - (int(time.time()) % 86400)
-        usdt_total = await execute_query(
-            "SELECT COALESCE(SUM(amount_usdt), 0) FROM withdraw_requests "
-            "WHERE status='pending' AND created_at >= $1",
-            today_start, fetch_val=True
-        ) or 0
-        from config import USD_RATE
-        return usdt_total * USD_RATE
-    return await execute_with_retry(_get)
+    today_start = int(time.time()) - (int(time.time()) % 86400)
+    usdt_total = await execute_query(
+        "SELECT COALESCE(SUM(amount_usdt), 0) FROM withdraw_requests WHERE status='pending' AND created_at >= $1",
+        today_start, fetch_val=True
+    ) or 0
+    from config import USD_RATE
+    return usdt_total * USD_RATE
 
 async def update_bonus_wagered(user_id: int, bet_amount: int, win: bool):
-    async def _update():
-        await execute_query(
-            "UPDATE users SET bonus_wagered = bonus_wagered + $1 WHERE user_id = $2",
-            bet_amount, user_id
-        )
-    await execute_with_retry(_update)
+    await execute_query("UPDATE users SET bonus_wagered = bonus_wagered + $1 WHERE user_id = $2", bet_amount, user_id)
 
 async def get_bonus_wagering_status(user_id: int) -> Tuple[int, int, bool]:
-    async def _get():
-        row = await execute_query(
-            "SELECT bonus_balance, bonus_wagered FROM users WHERE user_id = $1",
-            user_id, fetch_one=True
-        )
-        if not row:
-            return 0, 0, True
-        bonus_balance, bonus_wagered = row[0], row[1]
-        required_wagered = bonus_balance * BONUS_WAGER_MULTIPLIER
-        is_cleared = bonus_balance == 0 or bonus_wagered >= required_wagered
-        return bonus_balance, bonus_wagered, is_cleared
-    return await execute_with_retry(_get)
+    row = await execute_query("SELECT bonus_balance, bonus_wagered FROM users WHERE user_id = $1", user_id, fetch_one=True)
+    if not row:
+        return 0, 0, True
+    bonus_balance, bonus_wagered = row[0], row[1]
+    required_wagered = bonus_balance * BONUS_WAGER_MULTIPLIER
+    is_cleared = bonus_balance == 0 or bonus_wagered >= required_wagered
+    return bonus_balance, bonus_wagered, is_cleared
 
 # ===== Кэшбек =====
 async def get_weekly_losses(user_id: int) -> int:
-    async def _get():
-        week_ago = int(time.time()) - 7 * 86400
-        val = await execute_query(
-            "SELECT COALESCE(SUM(bet_amount - win_amount), 0) FROM game_history "
-            "WHERE user_id = $1 AND played_at >= $2 AND bet_amount > win_amount",
-            user_id, week_ago, fetch_val=True
-        )
-        return val if val else 0
-    return await execute_with_retry(_get)
+    week_ago = int(time.time()) - 7 * 86400
+    val = await execute_query(
+        "SELECT COALESCE(SUM(bet_amount - win_amount), 0) FROM game_history "
+        "WHERE user_id = $1 AND played_at >= $2 AND bet_amount > win_amount",
+        user_id, week_ago, fetch_val=True
+    )
+    return val if val else 0
 
 async def add_cashback(user_id: int, amount: int):
-    async def _add():
-        await execute_query(
-            "UPDATE users SET balance = balance + $1, bonus_total = bonus_total + $1, "
-            "bonus_balance = bonus_balance + $1 WHERE user_id = $2",
-            amount, amount, amount, user_id
-        )
-    await execute_with_retry(_add)
+    await execute_query(
+        "UPDATE users SET balance = balance + $1, bonus_total = bonus_total + $1, "
+        "bonus_balance = bonus_balance + $1 WHERE user_id = $2",
+        amount, user_id
+    )
 
 async def get_last_cashback_time(user_id: int) -> int:
-    async def _get():
-        val = await execute_query("SELECT last_cashback FROM users WHERE user_id = $1", user_id, fetch_val=True)
-        return val if val else 0
-    return await execute_with_retry(_get)
+    val = await execute_query("SELECT last_cashback FROM users WHERE user_id = $1", user_id, fetch_val=True)
+    return val if val else 0
 
 async def set_last_cashback_time(user_id: int, timestamp: int):
-    async def _set():
-        await execute_query("UPDATE users SET last_cashback = $1 WHERE user_id = $2", timestamp, user_id)
-    await execute_with_retry(_set)
+    await execute_query("UPDATE users SET last_cashback = $1 WHERE user_id = $2", timestamp, user_id)
 
-# ===== История игр =====
 async def save_game_history(user_id: int, bet: int, win: int, game_type: str):
-    async def _save():
-        await execute_query(
-            "INSERT INTO game_history (user_id, game_type, bet_amount, win_amount, played_at) "
-            "VALUES ($1, $2, $3, $4, $5)",
-            user_id, game_type, bet, win if win > 0 else 0, int(time.time())
-        )
-    await execute_with_retry(_save)
+    await execute_query(
+        "INSERT INTO game_history (user_id, game_type, bet_amount, win_amount, played_at) "
+        "VALUES ($1, $2, $3, $4, $5)",
+        user_id, game_type, bet, win if win > 0 else 0, int(time.time())
+    )

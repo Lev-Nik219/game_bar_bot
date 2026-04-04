@@ -59,6 +59,7 @@ dp.include_router(fallback_router)
 
 @dp.errors()
 async def global_error_handler(event: types.ErrorEvent):
+    """Глобальный обработчик ошибок"""
     logger.error(f"Глобальная ошибка: {event.exception}", exc_info=True)
     return True
 

@@ -923,6 +923,12 @@ async def main():
     dp = Dispatcher()
     dp.include_router(router)
     
+    # Глобальный обработчик ошибок для dp
+    @dp.errors()
+    async def dp_error_handler(event: types.ErrorEvent):
+        logger.error(f"Глобальная ошибка: {event.exception}", exc_info=True)
+        return True
+    
     try:
         await dp.start_polling(bot)
     finally:

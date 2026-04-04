@@ -315,6 +315,8 @@ async def achievements_menu_back_callback(callback: types.CallbackQuery):
 # --- Вывод средств ---
 async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_total: int, total_games: int) -> tuple[bool, str]:
     from database import execute_query
+    from config import MIN_GAMES_BEFORE_WITHDRAW, DAILY_WITHDRAW_LIMIT, WITHDRAW_COOLDOWN_HOURS, BONUS_WAGER_MULTIPLIER
+    from . import get_daily_withdrawn, get_last_deposit_time
     
     real_balance = balance - bonus_total
     
@@ -339,6 +341,7 @@ async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_t
         )
         if pending:
             req_id, amount_points, created_at = pending
+            from datetime import datetime
             return False, f"❌ У вас уже есть активная заявка #{req_id} на {amount_points} баллов от {datetime.fromtimestamp(created_at).strftime('%Y-%m-%d %H:%M')}. Дождитесь её обработки."
         return False, "❌ У вас уже есть активная заявка на вывод."
     
@@ -352,7 +355,6 @@ async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_t
         hours_left = (cooldown_seconds - (time.time() - last_deposit)) // 3600
         return False, f"❌ Вывод доступен через {hours_left} ч после пополнения."
     
-    # ИСПРАВЛЕНО: правильно получаем статус бонуса
     row = await execute_query(
         "SELECT bonus_balance, bonus_wagered FROM users WHERE user_id = $1",
         user_id, fetch_one=True

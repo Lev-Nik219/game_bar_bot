@@ -97,7 +97,8 @@ async def handle_message(message: types.Message):
 
 @dp.errors()
 async def global_error_handler(event: types.ErrorEvent):
-    logger.error(f"Глобальная ошибка в боте поддержки: {event.exception}", exc_info=True)
+    """Глобальный обработчик ошибок"""
+    logger.error(f"Глобальная ошибка: {event.exception}", exc_info=True)
     return True
 
 async def main():
