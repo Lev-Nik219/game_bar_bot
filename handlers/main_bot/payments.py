@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 from uuid import uuid4
+from datetime import datetime
 from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -18,6 +19,19 @@ router = Router()
 
 # Словарь для блокировки уже обработанных платежей
 processed_payments = set()
+
+def parse_crypto_time(time_str):
+    """Преобразует время из формата CryptoPay в timestamp"""
+    if isinstance(time_str, int):
+        return time_str
+    if isinstance(time_str, str):
+        try:
+            # Формат: 2026-04-04T13:05:36.703Z
+            dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+            return int(dt.timestamp())
+        except:
+            return int(time.time())
+    return int(time.time())
 
 @router.callback_query(F.data == "deposit")
 async def deposit_callback(callback: types.CallbackQuery):
@@ -159,7 +173,7 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Ошибка при создании платежа: {str(e)}")
         await state.clear()
 
-# ===== НОВАЯ СИСТЕМА КНОПКИ "Я ОПЛАТИЛ" - СРАЗУ УДАЛЯЕМ КНОПКУ =====
+# ===== НОВАЯ СИСТЕМА КНОПКИ "Я ОПЛАТИЛ" =====
 @router.callback_query(F.data.startswith("pay_"))
 async def process_payment_click(callback: types.CallbackQuery):
     payment_id = callback.data.replace("pay_", "")
@@ -170,7 +184,7 @@ async def process_payment_click(callback: types.CallbackQuery):
     # Показываем уведомление о начале обработки
     await callback.answer("⏳ Обрабатываю платеж...", show_alert=False)
     
-    # 1. СРАЗУ УДАЛЯЕМ СООБЩЕНИЕ С КНОПКОЙ (чтобы нельзя было нажать повторно)
+    # 1. СРАЗУ УДАЛЯЕМ СООБЩЕНИЕ С КНОПКОЙ
     try:
         await callback.bot.delete_message(chat_id, message_id)
     except Exception as e:
@@ -256,7 +270,9 @@ async def process_payment_click(callback: types.CallbackQuery):
         invoice_status = invoice.get('status')
         
         if invoice_status == 'paid':
-            paid_at = invoice.get('paid_at') or int(time.time())
+            # ИСПРАВЛЕНО: правильно обрабатываем дату из CryptoPay
+            paid_at_raw = invoice.get('paid_at') or int(time.time())
+            paid_at = parse_crypto_time(paid_at_raw)
             
             # 6. НАЧИСЛЯЕМ БАЛЛЫ
             balance = await execute_query("SELECT balance FROM users WHERE user_id = $1", user_id, fetch_val=True) or 0
@@ -265,7 +281,7 @@ async def process_payment_click(callback: types.CallbackQuery):
             await execute_query("UPDATE users SET balance = $1 WHERE user_id = $2", new_balance, user_id)
             await execute_query(
                 "UPDATE crypto_transactions SET status = 'paid', confirmed_at = $1 WHERE payment_id = $2",
-                int(paid_at), payment_id
+                paid_at, payment_id
             )
             await add_deposit(user_id, amount_points)
             
@@ -319,7 +335,8 @@ async def process_payment_click(callback: types.CallbackQuery):
                 "❌ Платёж не найден или не оплачен.\n\n"
                 "1. Оплатите по ссылке\n"
                 "2. Вернитесь в бота\n"
-                "3. Начните пополнение заново",
+                "3. Нажмите кнопку «Я оплатил» снова\n\n"
+                "Если вы уже оплатили, подождите 1-2 минуты и попробуйте снова.",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="💰 Пополнить снова", callback_data="deposit")],
                     [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
