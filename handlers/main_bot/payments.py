@@ -111,7 +111,6 @@ async def deposit_custom_start(callback: types.CallbackQuery, state: FSMContext)
 
     await state.set_state(CustomDepositStates.waiting_for_amount)
     
-    # Отправляем новое сообщение, а не редактируем старое
     await callback.message.delete()
     await callback.message.answer(
         "💰 Введите желаемое количество баллов (целое число, минимум 10):\n\n"
@@ -159,10 +158,8 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
 
         await create_crypto_transaction(user_id, amount_rub, amount_points, payment_id, invoice_id)
 
-        # Очищаем состояние
         await state.clear()
         
-        # Удаляем сообщение с вводом суммы
         await message.delete()
         
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -191,7 +188,6 @@ async def process_payment_click(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
     message_id = callback.message.message_id
     
-    # Показываем уведомление
     await callback.answer("⏳ Обрабатываю платеж...", show_alert=False)
     
     # 1. СРАЗУ УДАЛЯЕМ СООБЩЕНИЕ С КНОПКОЙ
@@ -294,11 +290,12 @@ async def process_payment_click(callback: types.CallbackQuery):
             )
             await add_deposit(user_id, amount_points)
             
-            # Бонус за первый депозит
-            first_deposit_claimed = await execute_query(
+            # Бонус за первый депозит (+50%) - ИСПРАВЛЕНО
+            row_bonus = await execute_query(
                 "SELECT first_deposit_bonus_claimed FROM users WHERE user_id = $1",
-                user_id, fetch_val=True
+                user_id, fetch_one=True
             )
+            first_deposit_claimed = row_bonus[0] if row_bonus else 0
             
             bonus_text = ""
             if not first_deposit_claimed:
@@ -355,7 +352,7 @@ async def process_payment_click(callback: types.CallbackQuery):
         await temp_msg.delete()
         await callback.bot.send_message(
             chat_id,
-            f"❌ Ошибка проверки платежа.\n\nПопробуйте позже.",
+            f"❌ Ошибка проверки платежа: {str(e)[:100]}\n\nПопробуйте позже.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
             ])

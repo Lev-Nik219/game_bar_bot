@@ -352,23 +352,29 @@ async def check_withdraw_limits(user_id: int, amount: int, balance: int, bonus_t
         hours_left = (cooldown_seconds - (time.time() - last_deposit)) // 3600
         return False, f"❌ Вывод доступен через {hours_left} ч после пополнения."
     
-    bonus_balance, bonus_wagered, is_cleared = await get_bonus_wagering_status(user_id)
-    if not is_cleared and bonus_balance > 0:
-        required = bonus_balance * BONUS_WAGER_MULTIPLIER
-        remaining = required - bonus_wagered
-        # ПОДРОБНОЕ ПОЯСНЕНИЕ ДЛЯ ПОЛЬЗОВАТЕЛЯ
-        return False, (
-            f"❌ <b>Бонус не отыгран!</b>\n\n"
-            f"У вас есть бонусные баллы: {bonus_balance} 💎\n"
-            f"Чтобы их вывести, нужно сначала сыграть на сумму: {required} баллов\n"
-            f"Вы уже отыграли: {bonus_wagered} баллов\n"
-            f"<b>Осталось отыграть: {remaining} баллов</b>\n\n"
-            f"💡 <b>Что это значит?</b>\n"
-            f"• Бонусные баллы вы получили бесплатно (за регистрацию или депозит)\n"
-            f"• Вы не можете сразу вывести бонус — это защита от мошенников\n"
-            f"• Просто продолжайте играть — после отыгрыша бонус станет доступен для вывода\n\n"
-            f"🎮 Сыграйте ещё на {remaining} баллов, и бонус разблокируется!"
-        )
+    # ИСПРАВЛЕНО: правильно получаем статус бонуса
+    row = await execute_query(
+        "SELECT bonus_balance, bonus_wagered FROM users WHERE user_id = $1",
+        user_id, fetch_one=True
+    )
+    if row:
+        bonus_balance, bonus_wagered = row
+        required_wagered = bonus_balance * BONUS_WAGER_MULTIPLIER
+        is_cleared = bonus_balance == 0 or bonus_wagered >= required_wagered
+        if not is_cleared and bonus_balance > 0:
+            remaining = required_wagered - bonus_wagered
+            return False, (
+                f"❌ <b>Бонус не отыгран!</b>\n\n"
+                f"У вас есть бонусные баллы: {bonus_balance} 💎\n"
+                f"Чтобы их вывести, нужно сначала сыграть на сумму: {required_wagered} баллов\n"
+                f"Вы уже отыграли: {bonus_wagered} баллов\n"
+                f"<b>Осталось отыграть: {remaining} баллов</b>\n\n"
+                f"💡 <b>Что это значит?</b>\n"
+                f"• Бонусные баллы вы получили бесплатно (за регистрацию или депозит)\n"
+                f"• Вы не можете сразу вывести бонус — это защита от мошенников\n"
+                f"• Просто продолжайте играть — после отыгрыша бонус станет доступен для вывода\n\n"
+                f"🎮 Сыграйте ещё на {remaining} баллов, и бонус разблокируется!"
+            )
     
     return True, "OK"
 
