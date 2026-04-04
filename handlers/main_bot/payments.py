@@ -180,7 +180,7 @@ async def deposit_custom_amount(message: types.Message, state: FSMContext):
         await state.clear()
         await message.answer(f"❌ Ошибка при создании платежа: {str(e)}")
 
-# ===== ОБРАБОТЧИК КНОПКИ "Я ОПЛАТИЛ" =====
+# ===== ОБРАБОТЧИК КНОПКИ "Я ОПЛАТИЛ" - ИСПРАВЛЕН =====
 @router.callback_query(F.data.startswith("pay_"))
 async def process_payment_click(callback: types.CallbackQuery):
     payment_id = callback.data.replace("pay_", "")
@@ -315,6 +315,7 @@ async def process_payment_click(callback: types.CallbackQuery):
             # Отправляем сообщение об успехе
             paid_date = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(paid_at))
             
+            # ОТПРАВЛЯЕМ НОВОЕ СООБЩЕНИЕ (не редактируем старое)
             await callback.bot.send_message(
                 chat_id,
                 f"✅ <b>Оплата подтверждена!</b>\n\n"
@@ -331,6 +332,9 @@ async def process_payment_click(callback: types.CallbackQuery):
             
             processed_payments.add(payment_id)
             
+            # ВАЖНО: НЕ ВЫЗЫВАЕМ ИСКЛЮЧЕНИЕ, ПРОСТО ВОЗВРАЩАЕМСЯ
+            return
+            
         else:
             await temp_msg.delete()
             await callback.bot.send_message(
@@ -345,14 +349,17 @@ async def process_payment_click(callback: types.CallbackQuery):
                     [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
                 ])
             )
+            return
             
     except Exception as e:
         logger.error(f"Ошибка при проверке платежа: {e}")
         await temp_msg.delete()
         await callback.bot.send_message(
             chat_id,
-            f"❌ Ошибка проверки платежа.\n\nПопробуйте позже.",
+            f"❌ Ошибка проверки платежа.\n\nПопробуйте позже.\n\nБаланс может быть уже пополнен, проверьте профиль.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")],
                 [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
             ])
         )
+        return
