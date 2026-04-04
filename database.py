@@ -103,6 +103,14 @@ async def create_db():
             )
         ''')
         
+        # Добавляем колонку first_deposit_bonus_claimed, если её нет (для старых таблиц)
+        try:
+            await conn.execute('''
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_bonus_claimed INTEGER DEFAULT 0
+            ''')
+        except Exception as e:
+            print(f"⚠️ Колонка first_deposit_bonus_claimed уже существует или ошибка: {e}")
+        
         # Достижения
         await conn.execute('''
             CREATE TABLE IF NOT EXISTS achievements (

@@ -290,12 +290,11 @@ async def process_payment_click(callback: types.CallbackQuery):
             )
             await add_deposit(user_id, amount_points)
             
-            # Бонус за первый депозит (+50%) - ИСПРАВЛЕНО
-            row_bonus = await execute_query(
+            # Бонус за первый депозит (+50%)
+            first_deposit_claimed = await execute_query(
                 "SELECT first_deposit_bonus_claimed FROM users WHERE user_id = $1",
-                user_id, fetch_one=True
+                user_id, fetch_val=True
             )
-            first_deposit_claimed = row_bonus[0] if row_bonus else 0
             
             bonus_text = ""
             if not first_deposit_claimed:
@@ -352,7 +351,7 @@ async def process_payment_click(callback: types.CallbackQuery):
         await temp_msg.delete()
         await callback.bot.send_message(
             chat_id,
-            f"❌ Ошибка проверки платежа: {str(e)[:100]}\n\nПопробуйте позже.",
+            f"❌ Ошибка проверки платежа.\n\nПопробуйте позже.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 В меню", callback_data="back_to_menu")]
             ])
