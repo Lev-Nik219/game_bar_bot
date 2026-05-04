@@ -4,25 +4,69 @@ import logging
 import os
 import time
 import json
+import sqlite3
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from config import MAIN_BOT_TOKEN
-from database import create_db, init_db_pool, close_db_pool, get_user, update_balance, update_stats, save_game_history
+from database import create_db, init_db_pool, close_db_pool
 from handlers.main_bot import (
     profile_router, payments_router, fallback_router, bot_info_router
 )
 from handlers.main_bot.cashback import router as cashback_router
-from handlers.main_bot.achievements import check_achievements
 from middlewares import UserStatusMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- HTTP сервер для API и healthcheck ----------
+# ---------- HTTP сервер для API (синхронный, без asyncio) ----------
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+
+DB_NAME_FOR_API = "casino.db"
+
+def get_balance_sync(user_id: int):
+    """Синхронное получение баланса из SQLite (без asyncio)"""
+    conn = sqlite3.connect(DB_NAME_FOR_API)
+    cursor = conn.cursor()
+    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def update_balance_sync(user_id: int, new_balance: int):
+    """Синхронное обновление баланса в SQLite"""
+    conn = sqlite3.connect(DB_NAME_FOR_API)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id))
+    conn.commit()
+    conn.close()
+
+def update_stats_sync(user_id: int, win: bool):
+    """Синхронное обновление статистики"""
+    conn = sqlite3.connect(DB_NAME_FOR_API)
+    cursor = conn.cursor()
+    cursor.execute("SELECT total_games, wins FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    if row:
+        total_games, wins = row
+        new_total = total_games + 1
+        new_wins = wins + (1 if win else 0)
+        cursor.execute("UPDATE users SET total_games = ?, wins = ? WHERE user_id = ?", (new_total, new_wins, user_id))
+    conn.commit()
+    conn.close()
+
+def save_game_history_sync(user_id: int, bet: int, win_amount: int, game_type: str):
+    """Синхронное сохранение истории игры"""
+    conn = sqlite3.connect(DB_NAME_FOR_API)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO game_history (user_id, game_type, bet_amount, win_amount, played_at) VALUES (?, ?, ?, ?, ?)",
+        (user_id, game_type, bet, win_amount, int(time.time()))
+    )
+    conn.commit()
+    conn.close()
 
 class MainHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -62,19 +106,12 @@ class MainHandler(BaseHTTPRequestHandler):
                 self._send_json({'success': False, 'error': 'user_id required'}, 400)
                 return
             
-            # Запускаем асинхронную функцию синхронно
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            user_data = loop.run_until_complete(get_user(int(user_id), None))
-            loop.close()
-            
-            balance = user_data[0]
-            bonus_total = user_data[2] if len(user_data) > 2 else 0
+            balance = get_balance_sync(int(user_id))
             
             self._send_json({
                 'success': True,
                 'balance': balance,
-                'bonus_total': bonus_total
+                'bonus_total': 0
             })
         except Exception as e:
             logger.error(f"Ошибка в get_balance: {e}")
@@ -95,22 +132,16 @@ class MainHandler(BaseHTTPRequestHandler):
                 self._send_json({'success': False, 'error': 'Missing required fields'}, 400)
                 return
             
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            user_data = loop.run_until_complete(get_user(int(user_id), None))
-            current_balance = user_data[0]
+            current_balance = get_balance_sync(int(user_id))
             
             if win:
                 new_balance = current_balance + win_amount
             else:
                 new_balance = current_balance - bet
             
-            loop.run_until_complete(update_balance(int(user_id), new_balance))
-            loop.run_until_complete(update_stats(int(user_id), win=win))
-            loop.run_until_complete(save_game_history(int(user_id), bet, win_amount if win else 0, game))
-            loop.run_until_complete(check_achievements(int(user_id), None))
-            loop.close()
+            update_balance_sync(int(user_id), new_balance)
+            update_stats_sync(int(user_id), win)
+            save_game_history_sync(int(user_id), bet, win_amount if win else 0, game)
             
             self._send_json({
                 'success': True,
@@ -172,7 +203,6 @@ async def main():
     
     await asyncio.sleep(1)
     
-    # Сбрасываем вебхук
     await bot.delete_webhook()
     
     dp.startup.register(on_startup)
