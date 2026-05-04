@@ -5,6 +5,8 @@ import os
 import time
 import json
 import sqlite3
+import signal
+import sys
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault
@@ -15,11 +17,19 @@ from handlers.main_bot import (
 )
 from handlers.main_bot.cashback import router as cashback_router
 from middlewares import UserStatusMiddleware
+from database import close_db_pool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- SQLite для API (синхронно) ----------
+# Обработчик SIGTERM для graceful shutdown
+def signal_handler(sig, frame):
+    logger.info("Received SIGTERM, shutting down gracefully...")
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, signal_handler)
+
+# ---------- SQLite для API ----------
 DB_NAME = "casino.db"
 
 def get_balance_sync(user_id: int):
@@ -60,7 +70,7 @@ def save_game_history_sync(user_id: int, bet: int, win_amount: int, game_type: s
     conn.commit()
     conn.close()
 
-# ---------- HTTP сервер на отдельном порту ----------
+# ---------- HTTP сервер ----------
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
@@ -103,12 +113,7 @@ class MainHandler(BaseHTTPRequestHandler):
                 return
             
             balance = get_balance_sync(int(user_id))
-            
-            self._send_json({
-                'success': True,
-                'balance': balance,
-                'bonus_total': 0
-            })
+            self._send_json({'success': True, 'balance': balance, 'bonus_total': 0})
         except Exception as e:
             logger.error(f"Ошибка в get_balance: {e}")
             self._send_json({'success': False, 'error': str(e)}, 500)
@@ -129,22 +134,13 @@ class MainHandler(BaseHTTPRequestHandler):
                 return
             
             current_balance = get_balance_sync(int(user_id))
-            
-            if win:
-                new_balance = current_balance + win_amount
-            else:
-                new_balance = current_balance - bet
+            new_balance = current_balance + win_amount if win else current_balance - bet
             
             update_balance_sync(int(user_id), new_balance)
             update_stats_sync(int(user_id), win)
             save_game_history_sync(int(user_id), bet, win_amount if win else 0, game)
             
-            self._send_json({
-                'success': True,
-                'new_balance': new_balance,
-                'win': win,
-                'win_amount': win_amount if win else 0
-            })
+            self._send_json({'success': True, 'new_balance': new_balance, 'win': win, 'win_amount': win_amount if win else 0})
         except Exception as e:
             logger.error(f"Ошибка в game_result: {e}")
             self._send_json({'success': False, 'error': str(e)}, 500)
@@ -160,14 +156,9 @@ class MainHandler(BaseHTTPRequestHandler):
         pass
 
 def run_api_server():
-    port = 8000  # Отдельный порт для API
+    port = 8000
     server = HTTPServer(('0.0.0.0', port), MainHandler)
     logger.info(f"API server started on port {port}")
-    server.serve_forever()
-
-def run_health_server():
-    port = int(os.environ.get('PORT', 10000))
-    server = HTTPServer(('0.0.0.0', port), MainHandler)
     server.serve_forever()
 
 # ---------- Telegram Bot ----------
@@ -196,20 +187,28 @@ async def on_startup():
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
     logger.info("Команды установлены, бот запущен.")
 
+async def on_shutdown():
+    logger.info("Shutting down bot...")
+    await bot.session.close()
+    await close_db_pool()
+
 async def main():
-    # Запускаем API сервер на порту 8000
+    # Запускаем API сервер
     api_thread = threading.Thread(target=run_api_server, daemon=True)
     api_thread.start()
     
-    # Запускаем healthcheck сервер на порту 10000
-    health_thread = threading.Thread(target=run_health_server, daemon=True)
-    health_thread.start()
-    
+    # Даём время на запуск API
     await asyncio.sleep(2)
     
+    # КРИТИЧЕСКИ ВАЖНО: Ждём, пока старый процесс Render умрёт
+    await asyncio.sleep(10)
+    
+    # Сбрасываем вебхук и очищаем очередь
     await bot.delete_webhook()
+    await bot.get_updates(offset=-1, timeout=1)
     
     dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
     
     await dp.start_polling(bot, allowed_updates=['message', 'callback_query'])
 
