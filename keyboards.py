@@ -1,13 +1,13 @@
 # keyboards.py - полный исправленный файл
 
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 
 def main_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Главная клавиатура с кнопкой для запуска Mini App"""
     keyboard = [
-        [KeyboardButton(text="🎰 Сыграть"), KeyboardButton(text="👤 Мой профиль")],
-        [KeyboardButton(text="🏆 Турниры"), KeyboardButton(text="ℹ️ О боте")],
-        [KeyboardButton(text="🎁 Ежедневный бонус")],
-        [KeyboardButton(text="👥 Пригласить друга")]
+        [KeyboardButton(text="🎮 Играть в Game Bar Casino", web_app=WebAppInfo(url="https://t.me/GamesAsino_bot/GamesAsino"))],
+        [KeyboardButton(text="👤 Мой профиль")],
+        [KeyboardButton(text="ℹ️ О боте"), KeyboardButton(text="👥 Пригласить друга")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
