@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 
 DB_NAME = "casino.db"
 
-# Константы для рекламы
-AD_REWARD_AMOUNT = 50
-AD_COOLDOWN_SECONDS = 300  # 5 минут
+# Константы для рекламы (ИЗМЕНЕНО)
+AD_REWARD_AMOUNT = 25  # Было 50
+AD_COOLDOWN_SECONDS = 20  # Было 300 (5 минут)
 
 def get_balance_sync(user_id: int):
     conn = sqlite3.connect(DB_NAME)
@@ -173,7 +173,6 @@ async def handle_game_result(request):
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 async def handle_claim_ad_reward(request):
-    """Начисление бонуса за просмотр рекламы"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -190,7 +189,7 @@ async def handle_claim_ad_reward(request):
                 'success': False, 
                 'error': 'cooldown', 
                 'remaining': remaining,
-                'message': f'Подождите {remaining // 60} минут'
+                'message': f'Подождите {remaining} секунд'
             }, status=200)
         
         current_balance = get_balance_sync(int(user_id))

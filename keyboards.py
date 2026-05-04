@@ -10,6 +10,18 @@ def main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
+def deposit_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура пополнения с новыми ценами в USDT"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1000 баллов = 65 USDT", callback_data="deposit_1000")],
+        [InlineKeyboardButton(text="750 баллов = 50 USDT", callback_data="deposit_750")],
+        [InlineKeyboardButton(text="500 баллов = 35 USDT", callback_data="deposit_500")],
+        [InlineKeyboardButton(text="250 баллов = 20 USDT", callback_data="deposit_250")],
+        [InlineKeyboardButton(text="💰 Другая сумма", callback_data="deposit_custom")],
+        [InlineKeyboardButton(text="🔙 Назад в профиль", callback_data="profile")]
+    ])
+
+# Остальные клавиатуры остаются без изменений...
 def agreement_short_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📖 Читать полное соглашение", callback_data="read_full_agreement")],
@@ -46,16 +58,6 @@ def achievements_menu_keyboard() -> InlineKeyboardMarkup:
 def achievements_back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Назад", callback_data="achievements_menu")]
-    ])
-
-def deposit_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="1000 баллов = 1000 руб (≈11.11 USDT)", callback_data="deposit_1000")],
-        [InlineKeyboardButton(text="750 баллов = 750 руб (≈8.33 USDT)", callback_data="deposit_750")],
-        [InlineKeyboardButton(text="500 баллов = 500 руб (≈5.56 USDT)", callback_data="deposit_500")],
-        [InlineKeyboardButton(text="250 баллов = 250 руб (≈2.78 USDT)", callback_data="deposit_250")],
-        [InlineKeyboardButton(text="💰 Другая сумма", callback_data="deposit_custom")],
-        [InlineKeyboardButton(text="🔙 Назад в профиль", callback_data="profile")]
     ])
 
 def back_to_menu_keyboard() -> InlineKeyboardMarkup:
