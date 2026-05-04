@@ -17,7 +17,8 @@ router = Router()
 class AdminStates(StatesGroup):
     waiting_for_target_id = State()
     waiting_for_amount = State()
-    waiting_for_broadcast_message = State()
+    waiting_for_broadcast_message = State()  # Для массовой рассылки
+    waiting_for_reply_message = State()      # Для ответа пользователю
 
 # Простая клавиатура для отмены
 def cancel_keyboard():
@@ -266,20 +267,20 @@ async def admin_stats_deposits_callback(callback: types.CallbackQuery):
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=admin_stats_back_keyboard())
     await callback.answer()
 
-# ---------- РАССЫЛКА ----------
+# ---------- МАССОВАЯ РАССЫЛКА ----------
 @router.callback_query(F.data == "admin_broadcast")
 async def admin_broadcast_callback(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
     await state.set_state(AdminStates.waiting_for_broadcast_message)
-    await callback.message.edit_text("Введите сообщение для рассылки:", reply_markup=cancel_keyboard())
+    await callback.message.edit_text("📢 Введите сообщение для массовой рассылки ВСЕМ пользователям:", reply_markup=cancel_keyboard())
     await callback.answer()
 
 @router.message(AdminStates.waiting_for_broadcast_message, F.text)
 async def admin_broadcast_message(message: types.Message, state: FSMContext):
     text = message.text
-    await message.answer("⏳ Начинаю рассылку...")
+    await message.answer("⏳ Начинаю массовую рассылку...")
 
     rows = await execute_query("SELECT user_id FROM users", fetch_all=True)
     users = rows if rows else []
@@ -289,13 +290,13 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
 
     for (user_id,) in users:
         try:
-            await message.bot.send_message(user_id, f"📢 <b>Рассылка от администратора</b>\n\n{text}", parse_mode="HTML")
+            await message.bot.send_message(user_id, f"📢 <b>Массовая рассылка от администратора</b>\n\n{text}", parse_mode="HTML")
             success += 1
             await asyncio.sleep(0.05)
         except Exception:
             failed += 1
 
-    await message.answer(f"✅ Рассылка завершена.\n\n📨 Успешно: {success}\n❌ Неудачно: {failed}")
+    await message.answer(f"✅ Массовая рассылка завершена.\n\n📨 Успешно: {success}\n❌ Неудачно: {failed}")
     await state.clear()
     await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
 

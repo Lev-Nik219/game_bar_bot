@@ -5,6 +5,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS
 from handlers.admin import AdminStates
+from keyboards.admin import admin_main_keyboard
 
 router = Router()
 
@@ -67,15 +68,16 @@ async def handle_user_message(message: types.Message):
     
     await message.answer("✅ Ваше сообщение отправлено администратору. Ответ придёт сюда в ближайшее время.")
 
+# ---------- ОТВЕТ ПОЛЬЗОВАТЕЛЮ ----------
 @router.callback_query(F.data.startswith("reply_to_user_"))
 async def reply_to_user(callback: types.CallbackQuery, state: FSMContext):
     user_id = int(callback.data.replace("reply_to_user_", ""))
     await state.update_data(reply_user_id=user_id)
-    await state.set_state(AdminStates.waiting_for_broadcast_message)
-    await callback.message.answer(f"✍️ Введите ответ для пользователя {user_id}:")
+    await state.set_state(AdminStates.waiting_for_reply_message)
+    await callback.message.answer(f"✍️ Введите ответ для пользователя {user_id} (ответ получит ТОЛЬКО этот пользователь):")
     await callback.answer()
 
-@router.message(AdminStates.waiting_for_broadcast_message, F.text)
+@router.message(AdminStates.waiting_for_reply_message, F.text)
 async def send_reply_to_user(message: types.Message, state: FSMContext):
     data = await state.get_data()
     target_user_id = data.get("reply_user_id")
@@ -92,7 +94,9 @@ async def send_reply_to_user(message: types.Message, state: FSMContext):
         await message.answer(f"❌ Не удалось отправить ответ: {e}")
     
     await state.clear()
+    await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
 
+# ---------- ПРОСМОТР СООБЩЕНИЙ ----------
 @router.callback_query(F.data == "admin_support_messages")
 async def admin_support_messages(callback: types.CallbackQuery):
     messages = get_unread_support_messages()
