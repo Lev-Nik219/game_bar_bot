@@ -73,6 +73,22 @@ dp.include_router(bot_info_router)
 dp.include_router(cashback_router)
 dp.include_router(fallback_router)
 
+# CORS middleware
+@web.middleware
+async def cors_middleware(request, handler):
+    if request.method == 'OPTIONS':
+        response = web.Response()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        return response
+    
+    response = await handler(request)
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
+
+app.middlewares.append(cors_middleware)
+
 # API endpoints
 async def handle_get_balance(request):
     try:
