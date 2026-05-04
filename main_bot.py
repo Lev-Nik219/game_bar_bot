@@ -3,11 +3,9 @@ import asyncio
 import logging
 import os
 import time
-import json
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault
-from flask import Flask, request, jsonify
 
 from config import MAIN_BOT_TOKEN
 from database import create_db, init_db_pool, close_db_pool, get_user, update_balance, update_stats, save_game_history
@@ -21,131 +19,19 @@ from middlewares import UserStatusMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- Flask для API Mini App ----------
-flask_app = Flask(__name__)
-
-def _add_cors_headers(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-    response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS, GET')
-    return response
-
-def _build_cors_preflight_response():
-    response = jsonify({'success': True})
-    return _add_cors_headers(response)
-
-# Функция для выполнения асинхронных запросов в синхронном окружении Flask
-def run_async(coro):
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    
-    if loop and loop.is_running():
-        # Если цикл уже запущен, создаём новую задачу
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, coro)
-            return future.result()
-    else:
-        # Запускаем новый цикл
-        return asyncio.run(coro)
-
-@flask_app.route('/api/get_balance', methods=['POST', 'OPTIONS', 'GET'])
-def api_get_balance():
-    if request.method == 'OPTIONS':
-        return _build_cors_preflight_response()
-    
-    try:
-        if request.method == 'GET':
-            user_id = request.args.get('user_id')
-        else:
-            data = request.get_json()
-            user_id = data.get('user_id') if data else None
-        
-        logger.info(f"API get_balance called for user_id: {user_id}")
-        
-        if not user_id:
-            return jsonify({'success': False, 'error': 'user_id required'}), 400
-        
-        # Используем run_async вместо создания нового цикла
-        user_data = run_async(get_user(int(user_id), None))
-        
-        balance = user_data[0]
-        bonus_total = user_data[2] if len(user_data) > 2 else 0
-        
-        logger.info(f"Balance for user {user_id}: {balance}")
-        
-        response = jsonify({
-            'success': True,
-            'balance': balance,
-            'bonus_total': bonus_total
-        })
-        return _add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Ошибка в api_get_balance: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@flask_app.route('/api/game_result', methods=['POST', 'OPTIONS'])
-def api_game_result():
-    if request.method == 'OPTIONS':
-        return _build_cors_preflight_response()
-    
-    try:
-        data = request.get_json()
-        user_id = data.get('user_id')
-        game = data.get('game')
-        bet = data.get('bet')
-        win = data.get('win')
-        win_amount = data.get('win_amount', 0)
-        details = data.get('details', {})
-        
-        logger.info(f"API game_result: user={user_id}, game={game}, bet={bet}, win={win}, amount={win_amount}")
-        
-        if not user_id or not game or bet is None:
-            return jsonify({'success': False, 'error': 'Missing required fields'}), 400
-        
-        # Получаем текущий баланс
-        user_data = run_async(get_user(int(user_id), None))
-        current_balance = user_data[0]
-        
-        # Обновляем баланс
-        if win:
-            new_balance = current_balance + win_amount
-        else:
-            new_balance = current_balance - bet
-        
-        run_async(update_balance(int(user_id), new_balance))
-        run_async(update_stats(int(user_id), win=win))
-        run_async(save_game_history(int(user_id), bet, win_amount if win else 0, game))
-        run_async(check_achievements(int(user_id), None))
-        
-        logger.info(f"New balance for user {user_id}: {new_balance}")
-        
-        response = jsonify({
-            'success': True,
-            'new_balance': new_balance,
-            'win': win,
-            'win_amount': win_amount if win else 0
-        })
-        return _add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Ошибка в api_game_result: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@flask_app.route('/health', methods=['GET'])
-def health():
-    return _add_cors_headers(jsonify({'status': 'ok'}))
-
-def run_flask():
-    port = int(os.environ.get('PORT', 10000))
-    flask_app.run(host='0.0.0.0', port=port, debug=False)
-
-# ---------- HTTP сервер для healthcheck ----------
+# ---------- Простой HTTP сервер для healthcheck и API ----------
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+import json
 
-class HealthHandler(BaseHTTPRequestHandler):
+class MainHandler(BaseHTTPRequestHandler):
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS, GET')
+        self.end_headers()
+    
     def do_GET(self):
         if self.path == '/health' or self.path == '/':
             self.send_response(200)
@@ -154,14 +40,103 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.wfile.write(b'{"status": "ok"}')
         else:
             self.send_response(404)
+            self.end_headers()
+    
+    def do_POST(self):
+        if self.path == '/api/get_balance':
+            self.handle_get_balance()
+        elif self.path == '/api/game_result':
+            self.handle_game_result()
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def handle_get_balance(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            data = json.loads(post_data.decode('utf-8'))
+            user_id = data.get('user_id')
+            
+            logger.info(f"API get_balance called for user_id: {user_id}")
+            
+            if not user_id:
+                self._send_json({'success': False, 'error': 'user_id required'}, 400)
+                return
+            
+            # Выполняем синхронно
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            user_data = loop.run_until_complete(get_user(int(user_id), None))
+            loop.close()
+            
+            balance = user_data[0]
+            bonus_total = user_data[2] if len(user_data) > 2 else 0
+            
+            self._send_json({
+                'success': True,
+                'balance': balance,
+                'bonus_total': bonus_total
+            })
+        except Exception as e:
+            logger.error(f"Ошибка в get_balance: {e}")
+            self._send_json({'success': False, 'error': str(e)}, 500)
+    
+    def handle_game_result(self):
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            data = json.loads(post_data.decode('utf-8'))
+            user_id = data.get('user_id')
+            game = data.get('game')
+            bet = data.get('bet')
+            win = data.get('win')
+            win_amount = data.get('win_amount', 0)
+            
+            if not user_id or not game or bet is None:
+                self._send_json({'success': False, 'error': 'Missing required fields'}, 400)
+                return
+            
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            user_data = loop.run_until_complete(get_user(int(user_id), None))
+            current_balance = user_data[0]
+            
+            if win:
+                new_balance = current_balance + win_amount
+            else:
+                new_balance = current_balance - bet
+            
+            loop.run_until_complete(update_balance(int(user_id), new_balance))
+            loop.run_until_complete(update_stats(int(user_id), win=win))
+            loop.run_until_complete(save_game_history(int(user_id), bet, win_amount if win else 0, game))
+            loop.run_until_complete(check_achievements(int(user_id), None))
+            loop.close()
+            
+            self._send_json({
+                'success': True,
+                'new_balance': new_balance,
+                'win': win,
+                'win_amount': win_amount if win else 0
+            })
+        except Exception as e:
+            logger.error(f"Ошибка в game_result: {e}")
+            self._send_json({'success': False, 'error': str(e)}, 500)
+    
+    def _send_json(self, data, status=200):
+        self.send_response(status)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
+        self.wfile.write(json.dumps(data).encode('utf-8'))
     
     def log_message(self, format, *args):
         pass
 
-def run_health_server():
-    port = int(os.environ.get('HEALTH_PORT', 10001))
-    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+def run_server():
+    port = int(os.environ.get('PORT', 10000))
+    server = HTTPServer(('0.0.0.0', port), MainHandler)
     server.serve_forever()
 
 # ---------- Telegram Bot ----------
@@ -193,11 +168,9 @@ async def on_startup():
     logger.info("База данных готова, команды установлены, бот запущен.")
 
 async def main():
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    health_thread = threading.Thread(target=run_health_server, daemon=True)
-    health_thread.start()
+    # Запускаем HTTP сервер
+    server_thread = threading.Thread(target=run_server, daemon=True)
+    server_thread.start()
     
     await asyncio.sleep(1)
     
