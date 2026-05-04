@@ -25,17 +25,32 @@ logger = logging.getLogger(__name__)
 # ---------- Flask для API Mini App ----------
 flask_app = Flask(__name__)
 
-@flask_app.route('/api/get_balance', methods=['POST'])
+def _add_cors_headers(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+    response.headers.add('Access-Control-Allow-Methods', 'POST, OPTIONS, GET')
+    return response
+
+def _build_cors_preflight_response():
+    response = jsonify({'success': True})
+    return _add_cors_headers(response)
+
+@flask_app.route('/api/get_balance', methods=['POST', 'OPTIONS', 'GET'])
 def api_get_balance():
-    """Получает баланс пользователя для веб-приложения"""
+    if request.method == 'OPTIONS':
+        return _build_cors_preflight_response()
+    
     try:
-        data = request.get_json()
-        user_id = data.get('user_id')
+        if request.method == 'GET':
+            user_id = request.args.get('user_id')
+        else:
+            data = request.get_json()
+            user_id = data.get('user_id') if data else None
         
         if not user_id:
             return jsonify({'success': False, 'error': 'user_id required'}), 400
         
-        # Запускаем асинхронную функцию в синхронном контексте
+        # Запускаем асинхронную функцию
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         user_data = loop.run_until_complete(get_user(int(user_id), None))
@@ -44,18 +59,21 @@ def api_get_balance():
         balance = user_data[0]
         bonus_total = user_data[2] if len(user_data) > 2 else 0
         
-        return jsonify({
+        response = jsonify({
             'success': True,
             'balance': balance,
             'bonus_total': bonus_total
         })
+        return _add_cors_headers(response)
     except Exception as e:
         logger.error(f"Ошибка в api_get_balance: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-@flask_app.route('/api/game_result', methods=['POST'])
+@flask_app.route('/api/game_result', methods=['POST', 'OPTIONS'])
 def api_game_result():
-    """Принимает результат игры от веб-приложения"""
+    if request.method == 'OPTIONS':
+        return _build_cors_preflight_response()
+    
     try:
         data = request.get_json()
         user_id = data.get('user_id')
@@ -86,29 +104,34 @@ def api_game_result():
         loop.run_until_complete(update_stats(int(user_id), win=win))
         loop.run_until_complete(save_game_history(int(user_id), bet, win_amount if win else 0, game))
         
-        # Проверяем достижения (запускаем в фоне)
+        # Проверяем достижения
         async def check_achievements_async():
             await check_achievements(int(user_id), None)
         loop.run_until_complete(check_achievements_async())
         
         loop.close()
         
-        return jsonify({
+        response = jsonify({
             'success': True,
             'new_balance': new_balance,
             'win': win,
             'win_amount': win_amount if win else 0
         })
+        return _add_cors_headers(response)
     except Exception as e:
         logger.error(f"Ошибка в api_game_result: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@flask_app.route('/health', methods=['GET'])
+def health():
+    return _add_cors_headers(jsonify({'status': 'ok'}))
 
 def run_flask():
     """Запускает Flask сервер для API Mini App"""
     port = int(os.environ.get('PORT', 10000))
     flask_app.run(host='0.0.0.0', port=port, debug=False)
 
-# ---------- HTTP сервер для healthcheck ----------
+# ---------- HTTP сервер для healthcheck (не используется, но оставлен для совместимости) ----------
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
@@ -127,7 +150,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         pass
 
 def run_health_server():
-    port = int(os.environ.get('PORT', 10000))
+    port = int(os.environ.get('HEALTH_PORT', 10001))
     server = HTTPServer(('0.0.0.0', port), HealthHandler)
     server.serve_forever()
 
@@ -163,13 +186,13 @@ async def on_startup():
     logger.info("База данных готова, команды установлены, бот запущен.")
 
 async def main():
-    # Запускаем healthcheck сервер
-    health_thread = threading.Thread(target=run_health_server, daemon=True)
-    health_thread.start()
-    
-    # Запускаем Flask API сервер
+    # Запускаем Flask API сервер (основной)
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
+    
+    # Запускаем healthcheck сервер на другом порту (опционально)
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
     
     await asyncio.sleep(1)
     
@@ -180,4 +203,4 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
