@@ -30,11 +30,6 @@ def get_unread_support_messages():
     conn.close()
     return rows
 
-@router.message(Command("reply"))
-async def reply_to_user(message: types.Message):
-    # Этот обработчик должен сработать первым
-    logger.info(f"КОМАНДА /reply ПОЛУЧЕНА от {message.from_user.id}")
-
 @router.message(F.text == "📩 Поддержка")
 async def support_contact(message: types.Message):
     await message.answer(
@@ -74,18 +69,21 @@ async def handle_user_message(message: types.Message):
 # ---------- ОТВЕТ ПОЛЬЗОВАТЕЛЮ ----------
 @router.message(Command("reply"))
 async def reply_to_user(message: types.Message):
-    # Отладочный вывод
-    logger.info(f"Команда /reply получена от {message.from_user.id}: {message.text}")
+    logger.info(f"КОМАНДА /reply ПОЛУЧЕНА от {message.from_user.id}: {message.text}")
     
     admin_id = message.from_user.id
     if admin_id not in ADMIN_IDS:
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
     
-    # Разбираем команду: /reply 8440882971 текст ответа
-    parts = message.text.split(maxsplit=2)
+    # Разбираем команду
+    text = message.text
+    parts = text.split(maxsplit=2)
+    
+    logger.info(f"Разбор команды: parts={parts}, len={len(parts)}")
     
     if len(parts) < 3:
+        logger.warning(f"Недостаточно аргументов: {parts}")
         await message.answer(
             "❌ Использование: /reply ID_пользователя текст_ответа\n\n"
             "Пример: `/reply 1234567890 Спасибо за обращение!`",
@@ -96,11 +94,11 @@ async def reply_to_user(message: types.Message):
     try:
         target_user_id = int(parts[1])
         reply_text = parts[2]
-    except ValueError:
+        logger.info(f"Целевой пользователь: {target_user_id}, текст: {reply_text}")
+    except ValueError as e:
+        logger.error(f"Ошибка преобразования ID: {e}")
         await message.answer("❌ ID пользователя должен быть числом.")
         return
-    
-    logger.info(f"Отправка ответа пользователю {target_user_id}: {reply_text}")
     
     try:
         await message.bot.send_message(
@@ -108,6 +106,7 @@ async def reply_to_user(message: types.Message):
             f"📨 <b>Ответ от администратора:</b>\n\n{reply_text}",
             parse_mode="HTML"
         )
+        logger.info(f"Ответ успешно отправлен пользователю {target_user_id}")
         await message.answer(f"✅ Ответ отправлен пользователю {target_user_id}")
     except Exception as e:
         logger.error(f"Ошибка отправки ответа: {e}")
