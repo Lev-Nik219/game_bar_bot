@@ -7,24 +7,70 @@ import sqlite3
 import time
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeDefault
+from aiogram.types import BotCommand, BotCommandScopeDefault, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from aiohttp import web
 
 from config import MAIN_BOT_TOKEN
-from handlers.main_bot import (
-    profile_router, payments_router, fallback_router, bot_info_router
-)
-from handlers.main_bot.cashback import router as cashback_router
-from middlewares import UserStatusMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DB_NAME = "casino.db"
 
-# Константы для рекламы (ИЗМЕНЕНО)
-AD_REWARD_AMOUNT = 25  # Было 50
-AD_COOLDOWN_SECONDS = 20  # Было 300 (5 минут)
+# Константы для рекламы
+AD_REWARD_AMOUNT = 25
+AD_COOLDOWN_SECONDS = 20
+
+# ---------- КЛАВИАТУРА С ОДНОЙ КНОПКОЙ ----------
+def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    webapp_url = f"https://game-bar-web.vercel.app?user_id={user_id}"
+    keyboard = [
+        [KeyboardButton(text="🎮 Играть в Game Bar Casino", web_app=WebAppInfo(url=webapp_url))]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+# ---------- ФУНКЦИИ РАБОТЫ С БАЗОЙ ДАННЫХ (SQLite) ----------
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            balance INTEGER DEFAULT 0,
+            total_games INTEGER DEFAULT 0,
+            wins INTEGER DEFAULT 0,
+            last_ad_watch INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS game_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            game_type TEXT NOT NULL,
+            bet_amount INTEGER NOT NULL,
+            win_amount INTEGER DEFAULT 0,
+            played_at INTEGER NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    logger.info("Database initialized")
+
+def get_user(user_id: int, username: str = None):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT balance, total_games, wins FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    if row:
+        cursor.execute("UPDATE users SET last_active = ? WHERE user_id = ?", (int(time.time()), user_id))
+        conn.commit()
+        conn.close()
+        return row
+    cursor.execute("INSERT INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
+    conn.commit()
+    conn.close()
+    return (0, 0, 0)
 
 def get_balance_sync(user_id: int):
     conn = sqlite3.connect(DB_NAME)
@@ -79,45 +125,51 @@ def set_last_ad_time_sync(user_id: int, timestamp: int):
     conn.commit()
     conn.close()
 
-def init_sqlite_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            balance INTEGER DEFAULT 0,
-            total_games INTEGER DEFAULT 0,
-            wins INTEGER DEFAULT 0,
-            last_ad_watch INTEGER DEFAULT 0
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS game_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            game_type TEXT NOT NULL,
-            bet_amount INTEGER NOT NULL,
-            win_amount INTEGER DEFAULT 0,
-            played_at INTEGER NOT NULL
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    logger.info("SQLite tables created/verified")
-
-# ---------- aiohttp сервер ----------
-app = web.Application()
+# ---------- TELEGRAM БОТ ----------
 bot = Bot(token=MAIN_BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-dp.message.middleware(UserStatusMiddleware())
-dp.include_router(profile_router)
-dp.include_router(payments_router)
-dp.include_router(bot_info_router)
-dp.include_router(cashback_router)
-dp.include_router(fallback_router)
+@dp.message()
+async def handle_message(message: types.Message):
+    user_id = message.from_user.id
+    username = message.from_user.username
+    get_user(user_id, username)
+    await message.answer(
+        "🎮 Добро пожаловать в Game Bar Casino!\n\n"
+        "Нажмите на кнопку ниже, чтобы начать игру.",
+        reply_markup=main_keyboard(user_id)
+    )
+
+@dp.message()
+async def cmd_start(message: types.Message):
+    user_id = message.from_user.id
+    username = message.from_user.username
+    get_user(user_id, username)
+    await message.answer(
+        "🎮 Добро пожаловать в Game Bar Casino!\n\n"
+        "Нажмите на кнопку ниже, чтобы начать игру.",
+        reply_markup=main_keyboard(user_id)
+    )
+
+@dp.errors()
+async def global_error_handler(event: types.ErrorEvent):
+    logger.error(f"Global error: {event.exception}", exc_info=True)
+    return True
+
+async def on_startup():
+    commands = [
+        BotCommand(command="start", description="Запустить бота"),
+    ]
+    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    logger.info("Bot started")
+
+async def on_shutdown():
+    await bot.session.close()
+    logger.info("Bot stopped")
+
+# ---------- Aiohttp СЕРВЕР ДЛЯ API И WEBHOOK ----------
+app = web.Application()
 
 # CORS middleware
 @web.middleware
@@ -128,7 +180,6 @@ async def cors_middleware(request, handler):
         response.headers['Access-Control-Allow-Methods'] = 'POST, GET, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         return response
-    
     response = await handler(request)
     response.headers['Access-Control-Allow-Origin'] = '*'
     return response
@@ -143,7 +194,7 @@ async def handle_get_balance(request):
         if not user_id:
             return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
         balance = get_balance_sync(int(user_id))
-        return web.json_response({'success': True, 'balance': balance, 'bonus_total': 0})
+        return web.json_response({'success': True, 'balance': balance})
     except Exception as e:
         logger.error(f"Error in get_balance: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
@@ -167,7 +218,7 @@ async def handle_game_result(request):
         update_stats_sync(int(user_id), win)
         save_game_history_sync(int(user_id), bet, win_amount if win else 0, game)
         
-        return web.json_response({'success': True, 'new_balance': new_balance, 'win': win, 'win_amount': win_amount if win else 0})
+        return web.json_response({'success': True, 'new_balance': new_balance, 'win': win})
     except Exception as e:
         logger.error(f"Error in game_result: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
@@ -176,7 +227,6 @@ async def handle_claim_ad_reward(request):
     try:
         data = await request.json()
         user_id = data.get('user_id')
-        
         if not user_id:
             return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
         
@@ -188,8 +238,7 @@ async def handle_claim_ad_reward(request):
             return web.json_response({
                 'success': False, 
                 'error': 'cooldown', 
-                'remaining': remaining,
-                'message': f'Подождите {remaining} секунд'
+                'remaining': remaining
             }, status=200)
         
         current_balance = get_balance_sync(int(user_id))
@@ -197,8 +246,6 @@ async def handle_claim_ad_reward(request):
         
         update_balance_sync(int(user_id), new_balance)
         set_last_ad_time_sync(int(user_id), now)
-        
-        logger.info(f"User {user_id} earned {AD_REWARD_AMOUNT} coins from ad")
         
         return web.json_response({
             'success': True, 
@@ -218,23 +265,6 @@ app.router.add_post('/api/claim_ad_reward', handle_claim_ad_reward)
 app.router.add_get('/health', health)
 app.router.add_get('/', health)
 
-@dp.errors()
-async def global_error_handler(event: types.ErrorEvent):
-    logger.error(f"Global error: {event.exception}", exc_info=True)
-    return True
-
-async def on_startup():
-    commands = [
-        BotCommand(command="start", description="Запустить бота"),
-        BotCommand(command="myid", description="Мой Telegram ID"),
-    ]
-    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
-    logger.info("Bot commands set")
-
-async def on_shutdown():
-    await bot.session.close()
-    logger.info("Bot stopped")
-
 async def handle_webhook(request):
     update = types.Update(**await request.json())
     await dp.feed_update(bot, update)
@@ -242,10 +272,11 @@ async def handle_webhook(request):
 
 app.router.add_post('/webhook', handle_webhook)
 
+# ---------- ОСНОВНАЯ ФУНКЦИЯ ----------
 async def main():
     port = int(os.environ.get('PORT', 10000))
     
-    init_sqlite_db()
+    init_db()
     
     await on_startup()
     
