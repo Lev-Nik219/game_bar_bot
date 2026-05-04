@@ -3,23 +3,112 @@ import asyncio
 import logging
 import os
 import time
+import json
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault
+from flask import Flask, request, jsonify
 
 from config import MAIN_BOT_TOKEN
-from database import create_db, init_db_pool, close_db_pool
+from database import create_db, init_db_pool, close_db_pool, get_user, update_balance, update_stats, save_game_history
 from handlers.main_bot import (
     games_router, profile_router, tournaments_router,
     payments_router, fallback_router, bot_info_router
 )
 from handlers.main_bot.cashback import router as cashback_router
+from handlers.main_bot.achievements import check_achievements
 from middlewares import UserStatusMiddleware
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Простой HTTP сервер для healthcheck
+# ---------- Flask для API Mini App ----------
+flask_app = Flask(__name__)
+
+@flask_app.route('/api/get_balance', methods=['POST'])
+def api_get_balance():
+    """Получает баланс пользователя для веб-приложения"""
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return jsonify({'success': False, 'error': 'user_id required'}), 400
+        
+        # Запускаем асинхронную функцию в синхронном контексте
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        user_data = loop.run_until_complete(get_user(int(user_id), None))
+        loop.close()
+        
+        balance = user_data[0]
+        bonus_total = user_data[2] if len(user_data) > 2 else 0
+        
+        return jsonify({
+            'success': True,
+            'balance': balance,
+            'bonus_total': bonus_total
+        })
+    except Exception as e:
+        logger.error(f"Ошибка в api_get_balance: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@flask_app.route('/api/game_result', methods=['POST'])
+def api_game_result():
+    """Принимает результат игры от веб-приложения"""
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        game = data.get('game')
+        bet = data.get('bet')
+        win = data.get('win')
+        win_amount = data.get('win_amount', 0)
+        details = data.get('details', {})
+        
+        if not user_id or not game or bet is None:
+            return jsonify({'success': False, 'error': 'Missing required fields'}), 400
+        
+        # Запускаем асинхронную функцию
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Получаем текущий баланс
+        user_data = loop.run_until_complete(get_user(int(user_id), None))
+        current_balance = user_data[0]
+        
+        # Обновляем баланс
+        if win:
+            new_balance = current_balance + win_amount
+        else:
+            new_balance = current_balance - bet
+        
+        loop.run_until_complete(update_balance(int(user_id), new_balance))
+        loop.run_until_complete(update_stats(int(user_id), win=win))
+        loop.run_until_complete(save_game_history(int(user_id), bet, win_amount if win else 0, game))
+        
+        # Проверяем достижения (запускаем в фоне)
+        async def check_achievements_async():
+            await check_achievements(int(user_id), None)
+        loop.run_until_complete(check_achievements_async())
+        
+        loop.close()
+        
+        return jsonify({
+            'success': True,
+            'new_balance': new_balance,
+            'win': win,
+            'win_amount': win_amount if win else 0
+        })
+    except Exception as e:
+        logger.error(f"Ошибка в api_game_result: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+def run_flask():
+    """Запускает Flask сервер для API Mini App"""
+    port = int(os.environ.get('API_PORT', 5000))
+    flask_app.run(host='0.0.0.0', port=port, debug=False)
+
+# ---------- HTTP сервер для healthcheck ----------
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
@@ -74,8 +163,13 @@ async def on_startup():
     logger.info("База данных готова, команды установлены, бот запущен.")
 
 async def main():
+    # Запускаем healthcheck сервер
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
+    
+    # Запускаем Flask API сервер
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
     
     await asyncio.sleep(1)
     
