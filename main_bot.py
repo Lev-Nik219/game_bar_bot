@@ -4,7 +4,9 @@ import logging
 import os
 import json
 import sqlite3
+import time
 from aiogram import Bot, Dispatcher, types
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault
 from aiohttp import web
 
@@ -58,7 +60,7 @@ def save_game_history_sync(user_id: int, bet: int, win_amount: int, game_type: s
     conn.commit()
     conn.close()
 
-# ---------- aiohttp сервер (и для webhook, и для API) ----------
+# ---------- aiohttp сервер ----------
 app = web.Application()
 bot = Bot(token=MAIN_BOT_TOKEN)
 storage = MemoryStorage()
