@@ -18,7 +18,7 @@ from database import (
     execute_query, DB_NAME
 )
 from keyboards import (
-    profile_keyboard, main_reply_keyboard, games_menu_keyboard,
+    profile_keyboard, main_reply_keyboard,
     back_to_menu_keyboard, agreement_short_keyboard, agreement_keyboard,
     achievements_menu_keyboard, achievements_back_keyboard
 )
@@ -196,9 +196,9 @@ async def cmd_myid(message: types.Message):
     await message.answer(f"Ваш Telegram ID: {message.from_user.id}")
 
 # ========== ОБРАБОТЧИКИ REPLY-КНОПОК ГЛАВНОГО МЕНЮ ==========
-@router.message(F.text == "🎰 Сыграть")
-async def reply_play(message: types.Message):
-    await message.answer("🎮 Выберите игру:", reply_markup=games_menu_keyboard())
+# @router.message(F.text == "🎰 Сыграть")
+# async def reply_play(message: types.Message):
+#     await message.answer("🎮 Выберите игру:", reply_markup=games_menu_keyboard())
 
 @router.message(F.text == "👤 Мой профиль")
 async def reply_profile(message: types.Message):
