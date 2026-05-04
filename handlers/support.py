@@ -30,6 +30,11 @@ def get_unread_support_messages():
     conn.close()
     return rows
 
+@router.message(Command("reply"))
+async def reply_to_user(message: types.Message):
+    # Этот обработчик должен сработать первым
+    logger.info(f"КОМАНДА /reply ПОЛУЧЕНА от {message.from_user.id}")
+
 @router.message(F.text == "📩 Поддержка")
 async def support_contact(message: types.Message):
     await message.answer(
