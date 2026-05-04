@@ -118,9 +118,9 @@ bot = Bot(token=MAIN_BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-dp.include_router(user_router)
-dp.include_router(admin_router)
 dp.include_router(support_router)
+dp.include_router(admin_router)
+dp.include_router(user_router)
 
 # ========== Aiohttp СЕРВЕР ДЛЯ API ==========
 app = web.Application()

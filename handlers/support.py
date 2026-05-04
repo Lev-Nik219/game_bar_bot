@@ -30,6 +30,22 @@ def get_unread_support_messages():
     conn.close()
     return rows
 
+async def notify_admins(bot, user_id, username, text):
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"📩 <b>Новое сообщение от пользователя</b>\n\n"
+                f"👤 ID: {user_id}\n"
+                f"👤 Username: @{username or 'нет'}\n"
+                f"📝 Сообщение: {text}\n\n"
+                f"💡 Чтобы ответить, используйте команду:\n"
+                f"<code>/reply {user_id} ваш текст ответа</code>",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Ошибка уведомления админа: {e}")
+
 @router.message(F.text == "📩 Поддержка")
 async def support_contact(message: types.Message):
     await message.answer(
@@ -39,39 +55,7 @@ async def support_contact(message: types.Message):
         "✏️ Введите ваше сообщение:"
     )
 
-@router.message(F.text)
-async def handle_user_message(message: types.Message):
-    user_id = message.from_user.id
-    text = message.text
-    
-    # ВАЖНО: пропускаем все команды (начинающиеся с /)
-    if text.startswith('/'):
-        return
-    
-    # Пропускаем сообщения от админов
-    if user_id in ADMIN_IDS:
-        return
-    
-    save_support_message(user_id, text)
-    
-    for admin_id in ADMIN_IDS:
-        try:
-            await message.bot.send_message(
-                admin_id,
-                f"📩 <b>Новое сообщение от пользователя</b>\n\n"
-                f"👤 ID: {user_id}\n"
-                f"👤 Username: @{message.from_user.username or 'нет'}\n"
-                f"📝 Сообщение: {text}\n\n"
-                f"💡 Чтобы ответить, отправьте команду:\n"
-                f"<code>/reply {user_id} ваш текст ответа</code>",
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.error(f"Ошибка уведомления админа: {e}")
-    
-    await message.answer("✅ Ваше сообщение отправлено администратору. Ответ придёт сюда в ближайшее время.")
-
-# ---------- ОТВЕТ ПОЛЬЗОВАТЕЛЮ ----------
+# ===== КОМАНДА ДЛЯ ОТВЕТА (ПЕРВЫЙ ПРИОРИТЕТ) =====
 @router.message(Command("reply"))
 async def reply_to_user(message: types.Message):
     logger.info(f"=== /reply command received from {message.from_user.id} ===")
@@ -81,35 +65,22 @@ async def reply_to_user(message: types.Message):
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
     
-    full_text = message.text
-    logger.info(f"Full command text: {full_text}")
+    # Разбираем команду
+    parts = message.text.split(maxsplit=2)
+    logger.info(f"Parts: {parts}")
     
-    # Убираем "/reply " из начала (6 символов)
-    without_command = full_text[6:].strip()
-    
-    # Ищем первый пробел
-    space_pos = without_command.find(' ')
-    
-    if space_pos == -1:
-        logger.warning(f"No space found in: {without_command}")
+    if len(parts) < 3:
         await message.answer(
             "❌ Использование: /reply ID_пользователя текст_ответа\n\n"
-            "Пример: `/reply 1234567890 Спасибо за обращение!`",
-            parse_mode="HTML"
+            "Пример: /reply 1234567890 Спасибо за обращение!"
         )
         return
     
     try:
-        target_user_id = int(without_command[:space_pos])
-        reply_text = without_command[space_pos + 1:].strip()
-        logger.info(f"Target user: {target_user_id}, reply text: {reply_text}")
-    except ValueError as e:
-        logger.error(f"Error parsing user ID: {e}")
+        target_user_id = int(parts[1])
+        reply_text = parts[2]
+    except ValueError:
         await message.answer("❌ ID пользователя должен быть числом.")
-        return
-    
-    if not reply_text:
-        await message.answer("❌ Текст ответа не может быть пустым.")
         return
     
     try:
@@ -124,7 +95,7 @@ async def reply_to_user(message: types.Message):
         logger.error(f"Failed to send reply: {e}")
         await message.answer(f"❌ Не удалось отправить ответ: {e}")
 
-# ---------- ПРОСМОТР СООБЩЕНИЙ ----------
+# ===== ПРОСМОТР НЕПРОЧИТАННЫХ СООБЩЕНИЙ =====
 @router.callback_query(F.data == "admin_support_messages")
 async def admin_support_messages(callback: types.CallbackQuery):
     messages = get_unread_support_messages()
@@ -146,5 +117,3 @@ async def admin_support_messages(callback: types.CallbackQuery):
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard)
     await callback.answer()
-
-print("=== support.py version 2025-05-05-003 === DEBUG MODE ACTIVE")

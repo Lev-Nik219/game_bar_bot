@@ -32,3 +32,27 @@ async def cmd_start(message: types.Message):
 @router.message(Command("myid"))
 async def cmd_myid(message: types.Message):
     await message.answer(f"Ваш Telegram ID: {message.from_user.id}")
+
+# ===== ВАЖНО: обработчик для любых текстовых сообщений НЕ ДОЛЖЕН ПЕРЕХВАТЫВАТЬ КОМАНДЫ =====
+@router.message(F.text)
+async def handle_regular_text(message: types.Message):
+    user_id = message.from_user.id
+    text = message.text
+    
+    # КЛЮЧЕВОЕ: пропускаем ВСЕ команды
+    if text.startswith('/'):
+        return
+    
+    # Пропускаем админов
+    if user_id in ADMIN_IDS:
+        return
+    
+    # Если дошли сюда — это обычный пользователь с обычным текстом
+    # Но мы не должны обрабатывать текстовые сообщения обычных пользователей,
+    # потому что у них нет других кнопок, кроме "Играть" и "Поддержка"
+    # Всё, что они пишут — это сообщение в поддержку
+    
+    from handlers.support import save_support_message, notify_admins
+    save_support_message(user_id, text)
+    await notify_admins(message.bot, user_id, message.from_user.username, text)
+    await message.answer("✅ Ваше сообщение отправлено администратору. Ответ придёт сюда.")
