@@ -146,3 +146,5 @@ async def admin_support_messages(callback: types.CallbackQuery):
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard)
     await callback.answer()
+
+print("=== support.py version 2025-05-05-003 === DEBUG MODE ACTIVE")
