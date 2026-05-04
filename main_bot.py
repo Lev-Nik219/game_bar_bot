@@ -7,10 +7,12 @@ import sqlite3
 import time
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, BotCommandScopeDefault, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from aiogram.types import BotCommand, BotCommandScopeDefault
 from aiohttp import web
 
 from config import MAIN_BOT_TOKEN
+from database import init_db_pool, close_db_pool, create_db
+from handlers import user_router, admin_router, support_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,57 +23,7 @@ DB_NAME = "casino.db"
 AD_REWARD_AMOUNT = 25
 AD_COOLDOWN_SECONDS = 20
 
-# ---------- КЛАВИАТУРА С ОДНОЙ КНОПКОЙ ----------
-def main_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    webapp_url = f"https://game-bar-web.vercel.app?user_id={user_id}"
-    keyboard = [
-        [KeyboardButton(text="🎮 Играть в Game Bar Casino", web_app=WebAppInfo(url=webapp_url))]
-    ]
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
-
-# ---------- ФУНКЦИИ РАБОТЫ С БАЗОЙ ДАННЫХ (SQLite) ----------
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            balance INTEGER DEFAULT 0,
-            total_games INTEGER DEFAULT 0,
-            wins INTEGER DEFAULT 0,
-            last_ad_watch INTEGER DEFAULT 0
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS game_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            game_type TEXT NOT NULL,
-            bet_amount INTEGER NOT NULL,
-            win_amount INTEGER DEFAULT 0,
-            played_at INTEGER NOT NULL
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    logger.info("Database initialized")
-
-def get_user(user_id: int, username: str = None):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT balance, total_games, wins FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    if row:
-        cursor.execute("UPDATE users SET last_active = ? WHERE user_id = ?", (int(time.time()), user_id))
-        conn.commit()
-        conn.close()
-        return row
-    cursor.execute("INSERT INTO users (user_id, username) VALUES (?, ?)", (user_id, username))
-    conn.commit()
-    conn.close()
-    return (0, 0, 0)
-
+# ========== ФУНКЦИИ РАБОТЫ С БАЗОЙ ДАННЫХ (SQLite для API) ==========
 def get_balance_sync(user_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -125,53 +77,54 @@ def set_last_ad_time_sync(user_id: int, timestamp: int):
     conn.commit()
     conn.close()
 
-# ---------- TELEGRAM БОТ ----------
+def init_sqlite_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            balance INTEGER DEFAULT 0,
+            total_games INTEGER DEFAULT 0,
+            wins INTEGER DEFAULT 0,
+            last_ad_watch INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS game_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            game_type TEXT NOT NULL,
+            bet_amount INTEGER NOT NULL,
+            win_amount INTEGER DEFAULT 0,
+            played_at INTEGER NOT NULL
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            message TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            is_read INTEGER DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    logger.info("SQLite tables created/verified")
+
+# ========== TELEGRAM БОТ ==========
 bot = Bot(token=MAIN_BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-@dp.message()
-async def handle_message(message: types.Message):
-    user_id = message.from_user.id
-    username = message.from_user.username
-    get_user(user_id, username)
-    await message.answer(
-        "🎮 Добро пожаловать в Game Bar Casino!\n\n"
-        "Нажмите на кнопку ниже, чтобы начать игру.",
-        reply_markup=main_keyboard(user_id)
-    )
+dp.include_router(user_router)
+dp.include_router(admin_router)
+dp.include_router(support_router)
 
-@dp.message()
-async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    username = message.from_user.username
-    get_user(user_id, username)
-    await message.answer(
-        "🎮 Добро пожаловать в Game Bar Casino!\n\n"
-        "Нажмите на кнопку ниже, чтобы начать игру.",
-        reply_markup=main_keyboard(user_id)
-    )
-
-@dp.errors()
-async def global_error_handler(event: types.ErrorEvent):
-    logger.error(f"Global error: {event.exception}", exc_info=True)
-    return True
-
-async def on_startup():
-    commands = [
-        BotCommand(command="start", description="Запустить бота"),
-    ]
-    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
-    logger.info("Bot started")
-
-async def on_shutdown():
-    await bot.session.close()
-    logger.info("Bot stopped")
-
-# ---------- Aiohttp СЕРВЕР ДЛЯ API И WEBHOOK ----------
+# ========== Aiohttp СЕРВЕР ДЛЯ API ==========
 app = web.Application()
 
-# CORS middleware
 @web.middleware
 async def cors_middleware(request, handler):
     if request.method == 'OPTIONS':
@@ -186,7 +139,6 @@ async def cors_middleware(request, handler):
 
 app.middlewares.append(cors_middleware)
 
-# API endpoints
 async def handle_get_balance(request):
     try:
         data = await request.json()
@@ -196,7 +148,6 @@ async def handle_get_balance(request):
         balance = get_balance_sync(int(user_id))
         return web.json_response({'success': True, 'balance': balance})
     except Exception as e:
-        logger.error(f"Error in get_balance: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 async def handle_game_result(request):
@@ -209,7 +160,7 @@ async def handle_game_result(request):
         win_amount = data.get('win_amount', 0)
         
         if not user_id or not game or bet is None:
-            return web.json_response({'success': False, 'error': 'Missing required fields'}, status=400)
+            return web.json_response({'success': False, 'error': 'Missing fields'}, status=400)
         
         current_balance = get_balance_sync(int(user_id))
         new_balance = current_balance + win_amount if win else current_balance - bet
@@ -220,7 +171,6 @@ async def handle_game_result(request):
         
         return web.json_response({'success': True, 'new_balance': new_balance, 'win': win})
     except Exception as e:
-        logger.error(f"Error in game_result: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 async def handle_claim_ad_reward(request):
@@ -235,25 +185,15 @@ async def handle_claim_ad_reward(request):
         
         if last_ad and now - last_ad < AD_COOLDOWN_SECONDS:
             remaining = AD_COOLDOWN_SECONDS - (now - last_ad)
-            return web.json_response({
-                'success': False, 
-                'error': 'cooldown', 
-                'remaining': remaining
-            }, status=200)
+            return web.json_response({'success': False, 'error': 'cooldown', 'remaining': remaining}, status=200)
         
         current_balance = get_balance_sync(int(user_id))
         new_balance = current_balance + AD_REWARD_AMOUNT
-        
         update_balance_sync(int(user_id), new_balance)
         set_last_ad_time_sync(int(user_id), now)
         
-        return web.json_response({
-            'success': True, 
-            'new_balance': new_balance,
-            'reward': AD_REWARD_AMOUNT
-        })
+        return web.json_response({'success': True, 'new_balance': new_balance, 'reward': AD_REWARD_AMOUNT})
     except Exception as e:
-        logger.error(f"Error in claim_ad_reward: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 async def health(request):
@@ -272,24 +212,39 @@ async def handle_webhook(request):
 
 app.router.add_post('/webhook', handle_webhook)
 
-# ---------- ОСНОВНАЯ ФУНКЦИЯ ----------
+# ========== ЗАПУСК ==========
+async def on_startup():
+    await init_db_pool()
+    await create_db()
+    init_sqlite_db()
+    commands = [
+        BotCommand(command="start", description="Запустить бота"),
+        BotCommand(command="myid", description="Мой Telegram ID"),
+        BotCommand(command="admin", description="Админ-панель"),
+    ]
+    await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    logger.info("Бот запущен")
+
+async def on_shutdown():
+    await bot.session.close()
+    await close_db_pool()
+    logger.info("Бот остановлен")
+
 async def main():
     port = int(os.environ.get('PORT', 10000))
-    
-    init_db()
     
     await on_startup()
     
     webhook_url = f"https://game-bar-bot.onrender.com/webhook"
-    await bot.delete_webhook()
+    await bot.delete_webhook(set=True)
     await bot.set_webhook(webhook_url)
-    logger.info(f"Webhook set to {webhook_url}")
+    logger.info(f"Webhook установлен на {webhook_url}")
     
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    logger.info(f"Server started on port {port}")
+    logger.info(f"HTTP сервер запущен на порту {port}")
     
     try:
         await asyncio.Future()
