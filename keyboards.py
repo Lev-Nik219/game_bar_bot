@@ -1,10 +1,12 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 
-def main_reply_keyboard() -> ReplyKeyboardMarkup:
+def main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     """Главная клавиатура с кнопкой для запуска Mini App"""
+    webapp_url = f"https://game-bar-web.vercel.app?user_id={user_id}"
+    
     keyboard = [
         [KeyboardButton(text="🎮 Играть в Game Bar Casino", 
-                       web_app=WebAppInfo(url="https://game-bar-web.vercel.app"))],
+                       web_app=WebAppInfo(url=webapp_url))],
         [KeyboardButton(text="👤 Мой профиль")],
         [KeyboardButton(text="ℹ️ О боте"), KeyboardButton(text="👥 Пригласить друга")]
     ]

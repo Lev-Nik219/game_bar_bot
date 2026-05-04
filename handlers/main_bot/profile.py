@@ -188,8 +188,11 @@ async def cmd_start(message: types.Message, state: FSMContext):
         return
 
     await state.clear()
-    text, keyboard = await get_game_over_text_and_keyboard(user_id, first_name, username)
-    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+    
+    # ИСПРАВЛЕННЫЕ СТРОКИ:
+    from keyboards import main_reply_keyboard
+    text = "🎮 Добро пожаловать в Game Bar Casino!\n\nВыберите действие:"
+    await message.answer(text, parse_mode="HTML", reply_markup=main_reply_keyboard(user_id))
 
 @router.message(Command("myid"))
 async def cmd_myid(message: types.Message):
@@ -213,7 +216,7 @@ async def reply_profile(message: types.Message):
 
 @router.message(F.text == "🏆 Турниры")
 async def reply_tournaments(message: types.Message):
-    from .tournaments import get_tournament_message
+    from .tournaments_old import get_tournament_message
     text, keyboard = await get_tournament_message(message.from_user.id, message.bot)
     await message.answer(text, reply_markup=keyboard)
 
