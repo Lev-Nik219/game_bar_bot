@@ -69,21 +69,26 @@ async def handle_user_message(message: types.Message):
 # ---------- ОТВЕТ ПОЛЬЗОВАТЕЛЮ ----------
 @router.message(Command("reply"))
 async def reply_to_user(message: types.Message):
-    logger.info(f"КОМАНДА /reply ПОЛУЧЕНА от {message.from_user.id}: {message.text}")
+    logger.info(f"=== /reply command received from {message.from_user.id} ===")
     
     admin_id = message.from_user.id
     if admin_id not in ADMIN_IDS:
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
     
-    # Разбираем команду
-    text = message.text
-    parts = text.split(maxsplit=2)
+    # Полный текст команды
+    full_text = message.text
+    logger.info(f"Full command text: {full_text}")
     
-    logger.info(f"Разбор команды: parts={parts}, len={len(parts)}")
+    # Разбираем команду: /reply 8440882971 текст ответа
+    # Убираем "/reply" и пробелы в начале
+    without_command = full_text[6:].strip()  # 6 = длина "/reply "
     
-    if len(parts) < 3:
-        logger.warning(f"Недостаточно аргументов: {parts}")
+    # Ищем первый пробел после ID
+    space_pos = without_command.find(' ')
+    
+    if space_pos == -1:
+        logger.warning(f"No space found in: {without_command}")
         await message.answer(
             "❌ Использование: /reply ID_пользователя текст_ответа\n\n"
             "Пример: `/reply 1234567890 Спасибо за обращение!`",
@@ -92,12 +97,16 @@ async def reply_to_user(message: types.Message):
         return
     
     try:
-        target_user_id = int(parts[1])
-        reply_text = parts[2]
-        logger.info(f"Целевой пользователь: {target_user_id}, текст: {reply_text}")
+        target_user_id = int(without_command[:space_pos])
+        reply_text = without_command[space_pos + 1:].strip()
+        logger.info(f"Target user: {target_user_id}, reply text: {reply_text}")
     except ValueError as e:
-        logger.error(f"Ошибка преобразования ID: {e}")
+        logger.error(f"Error parsing user ID: {e}")
         await message.answer("❌ ID пользователя должен быть числом.")
+        return
+    
+    if not reply_text:
+        await message.answer("❌ Текст ответа не может быть пустым.")
         return
     
     try:
@@ -106,10 +115,10 @@ async def reply_to_user(message: types.Message):
             f"📨 <b>Ответ от администратора:</b>\n\n{reply_text}",
             parse_mode="HTML"
         )
-        logger.info(f"Ответ успешно отправлен пользователю {target_user_id}")
+        logger.info(f"Reply sent successfully to {target_user_id}")
         await message.answer(f"✅ Ответ отправлен пользователю {target_user_id}")
     except Exception as e:
-        logger.error(f"Ошибка отправки ответа: {e}")
+        logger.error(f"Failed to send reply: {e}")
         await message.answer(f"❌ Не удалось отправить ответ: {e}")
 
 # ---------- ПРОСМОТР СООБЩЕНИЙ ----------
