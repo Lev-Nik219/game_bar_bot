@@ -247,9 +247,38 @@ async def main():
     logger.info(f"HTTP сервер запущен на порту {port}")
     
     try:
-        await asyncio.Future()
+        # Запускаем консольную утилиту для отправки сообщений
+        await console_reply()
     finally:
         await on_shutdown()
+
+async def console_reply():
+    """Функция для отправки сообщений через консоль Render"""
+    print("\n🔧 Консольный режим ответа пользователю.")
+    print("Введите ID пользователя и текст сообщения через пробел.")
+    print("Пример: 123456789 Привет! Как дела?")
+    print("Для выхода введите 'exit'\n")
+    
+    while True:
+        user_input = await asyncio.get_event_loop().run_in_executor(None, input, "> ")
+        if user_input.lower() == 'exit':
+            break
+            
+        parts = user_input.split(maxsplit=1)
+        if len(parts) < 2:
+            print("❌ Неверный формат. Введите: ID_пользователя Текст_сообщения")
+            continue
+            
+        try:
+            target_id = int(parts[0])
+            message_text = parts[1]
+            
+            await bot.send_message(target_id, f"📨 **Сообщение от администратора:**\n\n{message_text}", parse_mode="Markdown")
+            print(f"✅ Сообщение отправлено пользователю {target_id}")
+        except ValueError:
+            print("❌ ID пользователя должен быть числом!")
+        except Exception as e:
+            print(f"❌ Ошибка отправки: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
