@@ -4,7 +4,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS
-from database import execute_query
 from handlers.admin import AdminStates
 
 router = Router()
@@ -28,14 +27,6 @@ def get_unread_support_messages():
     rows = cursor.fetchall()
     conn.close()
     return rows
-
-def mark_support_message_read(msg_id: int):
-    import sqlite3
-    conn = sqlite3.connect("casino.db")
-    cursor = conn.cursor()
-    cursor.execute("UPDATE support_messages SET is_read = 1 WHERE id = ?", (msg_id,))
-    conn.commit()
-    conn.close()
 
 @router.message(F.text == "📩 Поддержка")
 async def support_contact(message: types.Message):
