@@ -237,7 +237,7 @@ async def main():
     await on_startup()
     
     webhook_url = f"https://game-bar-bot.onrender.com/webhook"
-    await bot.delete_webhook(set=True)
+    await bot.delete_webhook()
     await bot.set_webhook(webhook_url)
     logger.info(f"Webhook установлен на {webhook_url}")
     
