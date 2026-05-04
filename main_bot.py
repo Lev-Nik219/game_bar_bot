@@ -10,7 +10,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from config import MAIN_BOT_TOKEN
-from database import create_db, init_db_pool, close_db_pool
 from handlers.main_bot import (
     profile_router, payments_router, fallback_router, bot_info_router
 )
@@ -20,15 +19,11 @@ from middlewares import UserStatusMiddleware
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- HTTP сервер для API (синхронный, без asyncio) ----------
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-
-DB_NAME_FOR_API = "casino.db"
+# ---------- SQLite для API (синхронно) ----------
+DB_NAME = "casino.db"
 
 def get_balance_sync(user_id: int):
-    """Синхронное получение баланса из SQLite (без asyncio)"""
-    conn = sqlite3.connect(DB_NAME_FOR_API)
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -36,16 +31,14 @@ def get_balance_sync(user_id: int):
     return row[0] if row else 0
 
 def update_balance_sync(user_id: int, new_balance: int):
-    """Синхронное обновление баланса в SQLite"""
-    conn = sqlite3.connect(DB_NAME_FOR_API)
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id))
     conn.commit()
     conn.close()
 
 def update_stats_sync(user_id: int, win: bool):
-    """Синхронное обновление статистики"""
-    conn = sqlite3.connect(DB_NAME_FOR_API)
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT total_games, wins FROM users WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
@@ -58,8 +51,7 @@ def update_stats_sync(user_id: int, win: bool):
     conn.close()
 
 def save_game_history_sync(user_id: int, bet: int, win_amount: int, game_type: str):
-    """Синхронное сохранение истории игры"""
-    conn = sqlite3.connect(DB_NAME_FOR_API)
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO game_history (user_id, game_type, bet_amount, win_amount, played_at) VALUES (?, ?, ?, ?, ?)",
@@ -67,6 +59,10 @@ def save_game_history_sync(user_id: int, bet: int, win_amount: int, game_type: s
     )
     conn.commit()
     conn.close()
+
+# ---------- HTTP сервер на отдельном порту ----------
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
 class MainHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
@@ -163,7 +159,13 @@ class MainHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
-def run_server():
+def run_api_server():
+    port = 8000  # Отдельный порт для API
+    server = HTTPServer(('0.0.0.0', port), MainHandler)
+    logger.info(f"API server started on port {port}")
+    server.serve_forever()
+
+def run_health_server():
     port = int(os.environ.get('PORT', 10000))
     server = HTTPServer(('0.0.0.0', port), MainHandler)
     server.serve_forever()
@@ -187,21 +189,23 @@ async def global_error_handler(event: types.ErrorEvent):
     return True
 
 async def on_startup():
-    await init_db_pool()
-    await create_db()
     commands = [
         BotCommand(command="start", description="Запустить бота"),
         BotCommand(command="myid", description="Мой Telegram ID"),
     ]
     await bot.set_my_commands(commands, scope=BotCommandScopeDefault())
-    logger.info("База данных готова, команды установлены, бот запущен.")
+    logger.info("Команды установлены, бот запущен.")
 
 async def main():
-    # Запускаем HTTP сервер
-    server_thread = threading.Thread(target=run_server, daemon=True)
-    server_thread.start()
+    # Запускаем API сервер на порту 8000
+    api_thread = threading.Thread(target=run_api_server, daemon=True)
+    api_thread.start()
     
-    await asyncio.sleep(1)
+    # Запускаем healthcheck сервер на порту 10000
+    health_thread = threading.Thread(target=run_health_server, daemon=True)
+    health_thread.start()
+    
+    await asyncio.sleep(2)
     
     await bot.delete_webhook()
     
