@@ -7,7 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS
-from database import get_user, update_balance, get_user_stats, get_all_users, get_users_count, get_bonus_total, execute_query, get_deposit_stats
+from database import get_user, update_balance, get_user_stats, get_all_users, get_users_count, execute_query, get_deposit_stats
 from keyboards.admin import (
     admin_main_keyboard, admin_stats_keyboard, admin_stats_back_keyboard, users_list_keyboard
 )
@@ -18,7 +18,6 @@ class AdminStates(StatesGroup):
     waiting_for_target_id = State()
     waiting_for_amount = State()
     waiting_for_broadcast_message = State()
-    waiting_for_reply_message = State()  # Для ответа пользователю из поддержки
 
 def cancel_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -185,7 +184,6 @@ async def user_info_callback(callback: types.CallbackQuery):
         return
 
     balance, total_games, wins = stats
-    bonus_total = await get_bonus_total(user_id)
     win_percent = (wins / total_games * 100) if total_games > 0 else 0
     
     ad_views = await execute_query(
@@ -197,7 +195,6 @@ async def user_info_callback(callback: types.CallbackQuery):
         f"👤 <b>Информация о пользователе</b>\n"
         f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
         f"💎 <b>Баланс:</b> {balance}\n"
-        f"🎁 <b>Бонусный баланс:</b> {bonus_total}\n"
         f"🎮 <b>Всего игр:</b> {total_games}\n"
         f"🏆 <b>Побед:</b> {wins}\n"
         f"📊 <b>Процент побед:</b> {win_percent:.1f}%\n\n"
@@ -230,8 +227,16 @@ async def admin_stats_main_callback(callback: types.CallbackQuery):
     total_deposits = await execute_query("SELECT COUNT(*) FROM crypto_transactions WHERE status='paid'", fetch_val=True) or 0
     total_deposit_sum = await execute_query("SELECT COALESCE(SUM(amount), 0) FROM deposits", fetch_val=True) or 0
     
-    ad_views_total = await execute_query("SELECT COUNT(*) FROM game_history WHERE game_type = 'ad_reward'", fetch_val=True) or 0
-    ad_views_today = await execute_query("SELECT COUNT(*) FROM game_history WHERE game_type = 'ad_reward' AND played_at >= strftime('%s','now') - 86400", fetch_val=True) or 0
+    # Исправлено: убираем strftime, используем Python timestamp
+    today_start = int(time.time()) - 86400
+    ad_views_total = await execute_query(
+        "SELECT COUNT(*) FROM game_history WHERE game_type = 'ad_reward'",
+        fetch_val=True
+    ) or 0
+    ad_views_today = await execute_query(
+        "SELECT COUNT(*) FROM game_history WHERE game_type = 'ad_reward' AND played_at >= $1",
+        today_start, fetch_val=True
+    ) or 0
     ad_earnings = round(ad_views_total * 0.0005, 2)
 
     text = (
