@@ -105,7 +105,7 @@ def api_game_result():
 
 def run_flask():
     """Запускает Flask сервер для API Mini App"""
-    port = int(os.environ.get('API_PORT', 5000))
+    port = int(os.environ.get('PORT', 10000))
     flask_app.run(host='0.0.0.0', port=port, debug=False)
 
 # ---------- HTTP сервер для healthcheck ----------
@@ -180,4 +180,4 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main()) 
