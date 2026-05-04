@@ -20,7 +20,8 @@ async def get_game_over_text_and_keyboard(user_id: int, first_name: str, usernam
         f"Процент побед: {win_percent:.1f}%\n"
         f"Выберите действие:⤵️"
     )
-    keyboard = main_reply_keyboard()
+    # ✅ Исправлено: передаём user_id
+    keyboard = main_reply_keyboard(user_id)
     return text, keyboard
 
 async def check_zero_balance_and_notify(message: types.Message, user_id: int):

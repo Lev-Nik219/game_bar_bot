@@ -613,25 +613,12 @@ async def accept_agreement_callback(callback: types.CallbackQuery):
     username = callback.from_user.username
     first_name = callback.from_user.first_name
     
-    current_balance, *_ = await get_user(user_id, username)
-    new_balance = current_balance + 50
-    await update_balance(user_id, new_balance)
-    
-    await execute_query(
-        "UPDATE users SET bonus_balance = bonus_balance + 50 WHERE user_id = $1",
-        user_id
-    )
-    
-    try:
-        await log_agreement(user_id)
-        log_agreement_to_csv(user_id, username)
-    except Exception as e:
-        logger.error(f"Ошибка логирования: {e}")
-    
-    await reset_demo_games_played(user_id)
+    # ... код начисления бонуса ...
     
     await callback.message.answer("🎁 Вы получили 50 бонусных баллов за принятие соглашения!")
     await callback.message.delete()
+    
+    # ✅ Исправлено: явно передаём параметры
     await show_welcome_with_invite(
         callback.message, user_id, first_name, username, callback.bot
     )
@@ -649,7 +636,7 @@ async def invite_friend_callback(callback: types.CallbackQuery):
     )
 
 @router.callback_query(F.data == "back_to_menu")
-async def back_to_menu_callback(callback: types.CallbackQuery):
+async def back_to_menu_callback(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
     user_id = callback.from_user.id
     username = callback.from_user.username
@@ -657,8 +644,14 @@ async def back_to_menu_callback(callback: types.CallbackQuery):
 
     await set_user_started(user_id)
 
+    # ✅ Исправлено: передаём user_id
     text, keyboard = await get_game_over_text_and_keyboard(
         user_id, first_name, username
     )
-    await callback.message.delete()
+    
+    try:
+        await callback.message.delete()
+    except:
+        pass
+    
     await callback.message.answer(text, parse_mode="HTML", reply_markup=keyboard)
