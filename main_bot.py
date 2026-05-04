@@ -40,15 +40,19 @@ def api_get_balance():
         return _build_cors_preflight_response()
     
     try:
+        user_id = None
         if request.method == 'GET':
             user_id = request.args.get('user_id')
         else:
             data = request.get_json()
             user_id = data.get('user_id') if data else None
         
+        print(f"[DEBUG] get_balance called with user_id: {user_id}")
+        
         if not user_id:
             return jsonify({'success': False, 'error': 'user_id required'}), 400
         
+        # Запускаем асинхронную функцию
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         user_data = loop.run_until_complete(get_user(int(user_id), None))
@@ -56,6 +60,8 @@ def api_get_balance():
         
         balance = user_data[0]
         bonus_total = user_data[2] if len(user_data) > 2 else 0
+        
+        print(f"[DEBUG] Balance for user {user_id}: {balance}")
         
         response = jsonify({
             'success': True,
@@ -65,6 +71,63 @@ def api_get_balance():
         return _add_cors_headers(response)
     except Exception as e:
         logger.error(f"Ошибка в api_get_balance: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@flask_app.route('/api/game_result', methods=['POST', 'OPTIONS'])
+def api_game_result():
+    if request.method == 'OPTIONS':
+        return _build_cors_preflight_response()
+    
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+        game = data.get('game')
+        bet = data.get('bet')
+        win = data.get('win')
+        win_amount = data.get('win_amount', 0)
+        details = data.get('details', {})
+        
+        print(f"[DEBUG] game_result: user={user_id}, game={game}, bet={bet}, win={win}, amount={win_amount}")
+        
+        if not user_id or not game or bet is None:
+            return jsonify({'success': False, 'error': 'Missing required fields'}), 400
+        
+        # Запускаем асинхронную функцию
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Получаем текущий баланс
+        user_data = loop.run_until_complete(get_user(int(user_id), None))
+        current_balance = user_data[0]
+        
+        # Обновляем баланс
+        if win:
+            new_balance = current_balance + win_amount
+        else:
+            new_balance = current_balance - bet
+        
+        loop.run_until_complete(update_balance(int(user_id), new_balance))
+        loop.run_until_complete(update_stats(int(user_id), win=win))
+        loop.run_until_complete(save_game_history(int(user_id), bet, win_amount if win else 0, game))
+        
+        # Проверяем достижения
+        async def check_achievements_async():
+            await check_achievements(int(user_id), None)
+        loop.run_until_complete(check_achievements_async())
+        
+        loop.close()
+        
+        print(f"[DEBUG] New balance for user {user_id}: {new_balance}")
+        
+        response = jsonify({
+            'success': True,
+            'new_balance': new_balance,
+            'win': win,
+            'win_amount': win_amount if win else 0
+        })
+        return _add_cors_headers(response)
+    except Exception as e:
+        logger.error(f"Ошибка в api_game_result: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @flask_app.route('/api/game_result', methods=['POST', 'OPTIONS'])
