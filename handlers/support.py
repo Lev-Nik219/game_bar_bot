@@ -44,7 +44,12 @@ async def handle_user_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text
     
-    if text.startswith('/') or user_id in ADMIN_IDS:
+    # ВАЖНО: пропускаем все команды (начинающиеся с /)
+    if text.startswith('/'):
+        return
+    
+    # Пропускаем сообщения от админов
+    if user_id in ADMIN_IDS:
         return
     
     save_support_message(user_id, text)
@@ -76,15 +81,13 @@ async def reply_to_user(message: types.Message):
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
     
-    # Полный текст команды
     full_text = message.text
     logger.info(f"Full command text: {full_text}")
     
-    # Разбираем команду: /reply 8440882971 текст ответа
-    # Убираем "/reply" и пробелы в начале
-    without_command = full_text[6:].strip()  # 6 = длина "/reply "
+    # Убираем "/reply " из начала (6 символов)
+    without_command = full_text[6:].strip()
     
-    # Ищем первый пробел после ID
+    # Ищем первый пробел
     space_pos = without_command.find(' ')
     
     if space_pos == -1:
