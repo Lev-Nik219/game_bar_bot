@@ -23,12 +23,6 @@ def admin_stats_back_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🔙 Назад в админ-панель", callback_data="admin_back")]
     ])
 
-def admin_cancel_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_cancel")]])
-
-def admin_back_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]])
-
 def users_list_keyboard(users, page, total_pages) -> InlineKeyboardMarkup:
     keyboard = []
     for uid, username, balance, total_games in users:

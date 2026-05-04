@@ -97,8 +97,12 @@ async def send_reply_to_user(message: types.Message, state: FSMContext):
 async def admin_support_messages(callback: types.CallbackQuery):
     messages = get_unread_support_messages()
     
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
+    ])
+    
     if not messages:
-        await callback.message.edit_text("📭 Нет непрочитанных сообщений.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+        await callback.message.edit_text("📭 Нет непрочитанных сообщений.", reply_markup=keyboard)
         await callback.answer()
         return
     
@@ -107,5 +111,5 @@ async def admin_support_messages(callback: types.CallbackQuery):
         date = time.strftime('%Y-%m-%d %H:%M', time.localtime(created_at))
         text += f"👤 ID: {user_id}\n📅 {date}\n📝 {msg[:100]}\n\n"
     
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]))
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
     await callback.answer()

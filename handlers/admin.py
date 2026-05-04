@@ -9,8 +9,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import ADMIN_IDS
 from database import get_user, update_balance, get_user_stats, get_all_users, get_users_count, get_bonus_total, execute_query, get_deposit_stats
 from keyboards.admin import (
-    admin_main_keyboard, admin_cancel_keyboard, admin_back_keyboard,
-    admin_stats_keyboard, admin_stats_back_keyboard, users_list_keyboard
+    admin_main_keyboard, admin_stats_keyboard, admin_stats_back_keyboard, users_list_keyboard
 )
 
 router = Router()
@@ -19,6 +18,17 @@ class AdminStates(StatesGroup):
     waiting_for_target_id = State()
     waiting_for_amount = State()
     waiting_for_broadcast_message = State()
+
+# Простая клавиатура для отмены
+def cancel_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_cancel")]
+    ])
+
+def back_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
+    ])
 
 @router.message(Command("admin"))
 async def cmd_admin(message: types.Message):
@@ -35,7 +45,7 @@ async def admin_give_callback(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
     await state.set_state(AdminStates.waiting_for_target_id)
-    await callback.message.edit_text("Введите ID пользователя:", reply_markup=admin_cancel_keyboard())
+    await callback.message.edit_text("Введите ID пользователя:", reply_markup=cancel_keyboard())
     await callback.answer()
 
 @router.message(AdminStates.waiting_for_target_id, F.text)
@@ -43,21 +53,21 @@ async def admin_give_target_id(message: types.Message, state: FSMContext):
     try:
         target_id = int(message.text)
     except ValueError:
-        await message.answer("❌ ID должен быть числом.", reply_markup=admin_cancel_keyboard())
+        await message.answer("❌ ID должен быть числом.", reply_markup=cancel_keyboard())
         return
     await state.update_data(target_id=target_id)
     await state.set_state(AdminStates.waiting_for_amount)
-    await message.answer("Введите сумму для начисления:", reply_markup=admin_cancel_keyboard())
+    await message.answer("Введите сумму для начисления:", reply_markup=cancel_keyboard())
 
 @router.message(AdminStates.waiting_for_amount, F.text)
 async def admin_give_amount(message: types.Message, state: FSMContext):
     try:
         amount = int(message.text)
         if amount <= 0:
-            await message.answer("❌ Сумма должна быть положительной.", reply_markup=admin_cancel_keyboard())
+            await message.answer("❌ Сумма должна быть положительной.", reply_markup=cancel_keyboard())
             return
     except ValueError:
-        await message.answer("❌ Введите число.", reply_markup=admin_cancel_keyboard())
+        await message.answer("❌ Введите число.", reply_markup=cancel_keyboard())
         return
 
     data = await state.get_data()
@@ -77,7 +87,7 @@ async def admin_take_callback(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
     await state.set_state(AdminStates.waiting_for_target_id)
-    await callback.message.edit_text("Введите ID пользователя:", reply_markup=admin_cancel_keyboard())
+    await callback.message.edit_text("Введите ID пользователя:", reply_markup=cancel_keyboard())
     await callback.answer()
 
 @router.message(AdminStates.waiting_for_target_id, F.text)
@@ -85,21 +95,21 @@ async def admin_take_target_id(message: types.Message, state: FSMContext):
     try:
         target_id = int(message.text)
     except ValueError:
-        await message.answer("❌ ID должен быть числом.", reply_markup=admin_cancel_keyboard())
+        await message.answer("❌ ID должен быть числом.", reply_markup=cancel_keyboard())
         return
     await state.update_data(target_id=target_id)
     await state.set_state(AdminStates.waiting_for_amount)
-    await message.answer("Введите сумму для списания:", reply_markup=admin_cancel_keyboard())
+    await message.answer("Введите сумму для списания:", reply_markup=cancel_keyboard())
 
 @router.message(AdminStates.waiting_for_amount, F.text)
 async def admin_take_amount(message: types.Message, state: FSMContext):
     try:
         amount = int(message.text)
         if amount <= 0:
-            await message.answer("❌ Сумма должна быть положительной.", reply_markup=admin_cancel_keyboard())
+            await message.answer("❌ Сумма должна быть положительной.", reply_markup=cancel_keyboard())
             return
     except ValueError:
-        await message.answer("❌ Введите число.", reply_markup=admin_cancel_keyboard())
+        await message.answer("❌ Введите число.", reply_markup=cancel_keyboard())
         return
 
     data = await state.get_data()
@@ -135,9 +145,11 @@ async def show_users_page(message: types.Message, state: FSMContext, edit=False)
     total = await get_users_count(active_days=0)
     total_pages = (total + limit - 1) // limit
 
+    back_btn = [[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]
+
     if not users:
         text = "👥 Нет пользователей."
-        keyboard = [[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=back_btn)
     else:
         text = f"👥 <b>Список игроков — стр. {page+1}/{total_pages}</b>\n\n"
         keyboard = users_list_keyboard(users, page, total_pages)
@@ -194,7 +206,7 @@ async def user_info_callback(callback: types.CallbackQuery):
         f"   Заработано для казино: ≈ ${ad_views * 0.0005:.2f}"
     )
     
-    await callback.message.edit_text(info_text, parse_mode="HTML", reply_markup=admin_back_keyboard())
+    await callback.message.edit_text(info_text, parse_mode="HTML", reply_markup=back_keyboard())
     await callback.answer()
 
 # ---------- СТАТИСТИКА ----------
@@ -261,7 +273,7 @@ async def admin_broadcast_callback(callback: types.CallbackQuery, state: FSMCont
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
     await state.set_state(AdminStates.waiting_for_broadcast_message)
-    await callback.message.edit_text("Введите сообщение для рассылки:", reply_markup=admin_cancel_keyboard())
+    await callback.message.edit_text("Введите сообщение для рассылки:", reply_markup=cancel_keyboard())
     await callback.answer()
 
 @router.message(AdminStates.waiting_for_broadcast_message, F.text)
@@ -287,7 +299,7 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
 
-# ---------- ОТМЕНА ----------
+# ---------- ОТМЕНА И НАЗАД ----------
 @router.callback_query(F.data == "admin_cancel")
 async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
