@@ -17,10 +17,9 @@ router = Router()
 class AdminStates(StatesGroup):
     waiting_for_target_id = State()
     waiting_for_amount = State()
-    waiting_for_broadcast_message = State()  # Для массовой рассылки
-    waiting_for_reply_message = State()      # Для ответа пользователю
+    waiting_for_broadcast_message = State()
+    waiting_for_reply_message = State()  # Для ответа пользователю из поддержки
 
-# Простая клавиатура для отмены
 def cancel_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Отмена", callback_data="admin_cancel")]

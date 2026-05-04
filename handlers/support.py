@@ -43,15 +43,18 @@ async def handle_user_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text
     
+    # Пропускаем команды и сообщения админа
     if text.startswith('/') or user_id in ADMIN_IDS:
         return
     
+    # Сохраняем сообщение
     save_support_message(user_id, text)
     
+    # Уведомляем админов
     for admin_id in ADMIN_IDS:
         try:
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✅ Ответить", callback_data=f"reply_to_user_{user_id}")],
+                [InlineKeyboardButton(text="✅ Ответить пользователю", callback_data=f"reply_to_user_{user_id}")],
                 [InlineKeyboardButton(text="📋 Все сообщения", callback_data="admin_support_messages")]
             ])
             await message.bot.send_message(
@@ -63,17 +66,20 @@ async def handle_user_message(message: types.Message):
                 parse_mode="HTML",
                 reply_markup=keyboard
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Ошибка уведомления админа {admin_id}: {e}")
     
     await message.answer("✅ Ваше сообщение отправлено администратору. Ответ придёт сюда в ближайшее время.")
 
 # ---------- ОТВЕТ ПОЛЬЗОВАТЕЛЮ ----------
 @router.callback_query(F.data.startswith("reply_to_user_"))
 async def reply_to_user(callback: types.CallbackQuery, state: FSMContext):
+    # Извлекаем user_id из callback_data
     user_id = int(callback.data.replace("reply_to_user_", ""))
     await state.update_data(reply_user_id=user_id)
+    # Устанавливаем состояние ожидания ответа
     await state.set_state(AdminStates.waiting_for_reply_message)
+    # Отвечаем в чат админу
     await callback.message.answer(f"✍️ Введите ответ для пользователя {user_id} (ответ получит ТОЛЬКО этот пользователь):")
     await callback.answer()
 
@@ -84,6 +90,7 @@ async def send_reply_to_user(message: types.Message, state: FSMContext):
     reply_text = message.text
     
     try:
+        # Отправляем ответ ТОЛЬКО конкретному пользователю
         await message.bot.send_message(
             target_user_id,
             f"📨 <b>Ответ от администратора:</b>\n\n{reply_text}",
@@ -93,27 +100,31 @@ async def send_reply_to_user(message: types.Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"❌ Не удалось отправить ответ: {e}")
     
+    # Очищаем состояние
     await state.clear()
+    # Показываем админ-панель
     await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
 
-# ---------- ПРОСМОТР СООБЩЕНИЙ ----------
+# ---------- ПРОСМОТР НЕПРОЧИТАННЫХ СООБЩЕНИЙ ----------
 @router.callback_query(F.data == "admin_support_messages")
 async def admin_support_messages(callback: types.CallbackQuery):
     messages = get_unread_support_messages()
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
+    # Клавиатура для возврата в админ-панель
+    back_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 Назад в админ-панель", callback_data="admin_back")]
     ])
     
     if not messages:
-        await callback.message.edit_text("📭 Нет непрочитанных сообщений.", reply_markup=keyboard)
+        await callback.message.edit_text("📭 Нет непрочитанных сообщений от пользователей.", reply_markup=back_keyboard)
         await callback.answer()
         return
     
-    text = "📩 <b>Непрочитанные сообщения:</b>\n\n"
+    text = "📩 <b>Непрочитанные сообщения от пользователей:</b>\n\n"
     for msg_id, user_id, msg, created_at in messages[:10]:
         date = time.strftime('%Y-%m-%d %H:%M', time.localtime(created_at))
-        text += f"👤 ID: {user_id}\n📅 {date}\n📝 {msg[:100]}\n\n"
+        text += f"👤 ID: {user_id}\n📅 {date}\n📝 Сообщение: {msg[:200]}\n"
+        text += f"➡️ Чтобы ответить, нажмите на кнопку в уведомлении выше\n\n"
     
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard)
     await callback.answer()
