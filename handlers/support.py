@@ -1,15 +1,14 @@
 import time
+import logging
 from aiogram import Router, types, F
-from aiogram.filters import Command  # <-- ДОБАВИТЬ ЭТУ СТРОКУ
+from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS
 from keyboards.admin import admin_main_keyboard
 
+logger = logging.getLogger(__name__)
 router = Router()
-
-# Хранилище ожидающих ответов {admin_id: user_id}
-pending_replies = {}
 
 def save_support_message(user_id: int, message: str):
     import sqlite3
@@ -45,7 +44,6 @@ async def handle_user_message(message: types.Message):
     user_id = message.from_user.id
     text = message.text
     
-    # Пропускаем команды и сообщения админа
     if text.startswith('/') or user_id in ADMIN_IDS:
         return
     
@@ -60,37 +58,44 @@ async def handle_user_message(message: types.Message):
                 f"👤 Username: @{message.from_user.username or 'нет'}\n"
                 f"📝 Сообщение: {text}\n\n"
                 f"💡 Чтобы ответить, отправьте команду:\n"
-                f"<code>/reply {user_id} ваш ответ</code>\n\n"
-                f"Пример: <code>/reply {user_id} Спасибо за обращение!</code>",
+                f"<code>/reply {user_id} ваш текст ответа</code>",
                 parse_mode="HTML"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Ошибка уведомления админа: {e}")
     
     await message.answer("✅ Ваше сообщение отправлено администратору. Ответ придёт сюда в ближайшее время.")
 
-# ---------- ОТВЕТ ПОЛЬЗОВАТЕЛЮ ЧЕРЕЗ КОМАНДУ ----------
+# ---------- ОТВЕТ ПОЛЬЗОВАТЕЛЮ ----------
 @router.message(Command("reply"))
-async def reply_to_user_command(message: types.Message):
+async def reply_to_user(message: types.Message):
+    # Отладочный вывод
+    logger.info(f"Команда /reply получена от {message.from_user.id}: {message.text}")
+    
     admin_id = message.from_user.id
     if admin_id not in ADMIN_IDS:
         await message.answer("❌ У вас нет доступа к этой команде.")
         return
     
-    args = message.text.split(maxsplit=2)
-    if len(args) < 3:
+    # Разбираем команду: /reply 8440882971 текст ответа
+    parts = message.text.split(maxsplit=2)
+    
+    if len(parts) < 3:
         await message.answer(
-            "❌ Использование: /reply <ID_пользователя> <текст ответа>\n\n"
-            "Пример: /reply 1234567890 Спасибо за обращение!"
+            "❌ Использование: /reply ID_пользователя текст_ответа\n\n"
+            "Пример: `/reply 1234567890 Спасибо за обращение!`",
+            parse_mode="HTML"
         )
         return
     
     try:
-        target_user_id = int(args[1])
-        reply_text = args[2]
+        target_user_id = int(parts[1])
+        reply_text = parts[2]
     except ValueError:
         await message.answer("❌ ID пользователя должен быть числом.")
         return
+    
+    logger.info(f"Отправка ответа пользователю {target_user_id}: {reply_text}")
     
     try:
         await message.bot.send_message(
@@ -100,6 +105,7 @@ async def reply_to_user_command(message: types.Message):
         )
         await message.answer(f"✅ Ответ отправлен пользователю {target_user_id}")
     except Exception as e:
+        logger.error(f"Ошибка отправки ответа: {e}")
         await message.answer(f"❌ Не удалось отправить ответ: {e}")
 
 # ---------- ПРОСМОТР СООБЩЕНИЙ ----------
@@ -112,15 +118,15 @@ async def admin_support_messages(callback: types.CallbackQuery):
     ])
     
     if not messages:
-        await callback.message.edit_text("📭 Нет непрочитанных сообщений от пользователей.", reply_markup=back_keyboard)
+        await callback.message.edit_text("📭 Нет непрочитанных сообщений.", reply_markup=back_keyboard)
         await callback.answer()
         return
     
-    text = "📩 <b>Непрочитанные сообщения от пользователей:</b>\n\n"
+    text = "📩 <b>Непрочитанные сообщения:</b>\n\n"
     for msg_id, user_id, msg, created_at in messages[:10]:
         date = time.strftime('%Y-%m-%d %H:%M', time.localtime(created_at))
         text += f"👤 ID: {user_id}\n📅 {date}\n📝 {msg}\n"
-        text += f"➡️ Чтобы ответить: <code>/reply {user_id} ваш ответ</code>\n\n"
+        text += f"➡️ Ответ: <code>/reply {user_id} ваш текст</code>\n\n"
     
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard)
     await callback.answer()
