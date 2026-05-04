@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 
 DB_NAME = "casino.db"
 
+# Константы для рекламы
+AD_REWARD_AMOUNT = 50
+AD_COOLDOWN_SECONDS = 300  # 5 минут
+
 def get_balance_sync(user_id: int):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -60,8 +64,22 @@ def save_game_history_sync(user_id: int, bet: int, win_amount: int, game_type: s
     conn.commit()
     conn.close()
 
+def get_last_ad_time_sync(user_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT last_ad_watch FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def set_last_ad_time_sync(user_id: int, timestamp: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET last_ad_watch = ? WHERE user_id = ?", (timestamp, user_id))
+    conn.commit()
+    conn.close()
+
 def init_sqlite_db():
-    """Создаёт таблицы в SQLite для API"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
@@ -70,7 +88,8 @@ def init_sqlite_db():
             username TEXT,
             balance INTEGER DEFAULT 0,
             total_games INTEGER DEFAULT 0,
-            wins INTEGER DEFAULT 0
+            wins INTEGER DEFAULT 0,
+            last_ad_watch INTEGER DEFAULT 0
         )
     ''')
     cursor.execute('''
@@ -153,11 +172,50 @@ async def handle_game_result(request):
         logger.error(f"Error in game_result: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
+async def handle_claim_ad_reward(request):
+    """Начисление бонуса за просмотр рекламы"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
+        
+        last_ad = get_last_ad_time_sync(int(user_id))
+        now = int(time.time())
+        
+        if last_ad and now - last_ad < AD_COOLDOWN_SECONDS:
+            remaining = AD_COOLDOWN_SECONDS - (now - last_ad)
+            return web.json_response({
+                'success': False, 
+                'error': 'cooldown', 
+                'remaining': remaining,
+                'message': f'Подождите {remaining // 60} минут'
+            }, status=200)
+        
+        current_balance = get_balance_sync(int(user_id))
+        new_balance = current_balance + AD_REWARD_AMOUNT
+        
+        update_balance_sync(int(user_id), new_balance)
+        set_last_ad_time_sync(int(user_id), now)
+        
+        logger.info(f"User {user_id} earned {AD_REWARD_AMOUNT} coins from ad")
+        
+        return web.json_response({
+            'success': True, 
+            'new_balance': new_balance,
+            'reward': AD_REWARD_AMOUNT
+        })
+    except Exception as e:
+        logger.error(f"Error in claim_ad_reward: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
 async def health(request):
     return web.json_response({'status': 'ok'})
 
 app.router.add_post('/api/get_balance', handle_get_balance)
 app.router.add_post('/api/game_result', handle_game_result)
+app.router.add_post('/api/claim_ad_reward', handle_claim_ad_reward)
 app.router.add_get('/health', health)
 app.router.add_get('/', health)
 
@@ -188,18 +246,15 @@ app.router.add_post('/webhook', handle_webhook)
 async def main():
     port = int(os.environ.get('PORT', 10000))
     
-    # Инициализируем SQLite таблицы
     init_sqlite_db()
     
     await on_startup()
     
-    # Устанавливаем webhook
     webhook_url = f"https://game-bar-bot.onrender.com/webhook"
     await bot.delete_webhook()
     await bot.set_webhook(webhook_url)
     logger.info(f"Webhook set to {webhook_url}")
     
-    # Запускаем aiohttp сервер
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', port)
