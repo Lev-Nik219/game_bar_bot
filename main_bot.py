@@ -34,34 +34,47 @@ def _build_cors_preflight_response():
     response = jsonify({'success': True})
     return _add_cors_headers(response)
 
+# Функция для выполнения асинхронных запросов в синхронном окружении Flask
+def run_async(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    
+    if loop and loop.is_running():
+        # Если цикл уже запущен, создаём новую задачу
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        # Запускаем новый цикл
+        return asyncio.run(coro)
+
 @flask_app.route('/api/get_balance', methods=['POST', 'OPTIONS', 'GET'])
 def api_get_balance():
     if request.method == 'OPTIONS':
         return _build_cors_preflight_response()
     
     try:
-        user_id = None
         if request.method == 'GET':
             user_id = request.args.get('user_id')
         else:
             data = request.get_json()
             user_id = data.get('user_id') if data else None
         
-        print(f"[DEBUG] get_balance called with user_id: {user_id}")
+        logger.info(f"API get_balance called for user_id: {user_id}")
         
         if not user_id:
             return jsonify({'success': False, 'error': 'user_id required'}), 400
         
-        # Запускаем асинхронную функцию
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        user_data = loop.run_until_complete(get_user(int(user_id), None))
-        loop.close()
+        # Используем run_async вместо создания нового цикла
+        user_data = run_async(get_user(int(user_id), None))
         
         balance = user_data[0]
         bonus_total = user_data[2] if len(user_data) > 2 else 0
         
-        print(f"[DEBUG] Balance for user {user_id}: {balance}")
+        logger.info(f"Balance for user {user_id}: {balance}")
         
         response = jsonify({
             'success': True,
@@ -87,17 +100,13 @@ def api_game_result():
         win_amount = data.get('win_amount', 0)
         details = data.get('details', {})
         
-        print(f"[DEBUG] game_result: user={user_id}, game={game}, bet={bet}, win={win}, amount={win_amount}")
+        logger.info(f"API game_result: user={user_id}, game={game}, bet={bet}, win={win}, amount={win_amount}")
         
         if not user_id or not game or bet is None:
             return jsonify({'success': False, 'error': 'Missing required fields'}), 400
         
-        # Запускаем асинхронную функцию
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
         # Получаем текущий баланс
-        user_data = loop.run_until_complete(get_user(int(user_id), None))
+        user_data = run_async(get_user(int(user_id), None))
         current_balance = user_data[0]
         
         # Обновляем баланс
@@ -106,67 +115,12 @@ def api_game_result():
         else:
             new_balance = current_balance - bet
         
-        loop.run_until_complete(update_balance(int(user_id), new_balance))
-        loop.run_until_complete(update_stats(int(user_id), win=win))
-        loop.run_until_complete(save_game_history(int(user_id), bet, win_amount if win else 0, game))
+        run_async(update_balance(int(user_id), new_balance))
+        run_async(update_stats(int(user_id), win=win))
+        run_async(save_game_history(int(user_id), bet, win_amount if win else 0, game))
+        run_async(check_achievements(int(user_id), None))
         
-        # Проверяем достижения
-        async def check_achievements_async():
-            await check_achievements(int(user_id), None)
-        loop.run_until_complete(check_achievements_async())
-        
-        loop.close()
-        
-        print(f"[DEBUG] New balance for user {user_id}: {new_balance}")
-        
-        response = jsonify({
-            'success': True,
-            'new_balance': new_balance,
-            'win': win,
-            'win_amount': win_amount if win else 0
-        })
-        return _add_cors_headers(response)
-    except Exception as e:
-        logger.error(f"Ошибка в api_game_result: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@flask_app.route('/api/game_result', methods=['POST', 'OPTIONS'])
-def api_game_result():
-    if request.method == 'OPTIONS':
-        return _build_cors_preflight_response()
-    
-    try:
-        data = request.get_json()
-        user_id = data.get('user_id')
-        game = data.get('game')
-        bet = data.get('bet')
-        win = data.get('win')
-        win_amount = data.get('win_amount', 0)
-        details = data.get('details', {})
-        
-        if not user_id or not game or bet is None:
-            return jsonify({'success': False, 'error': 'Missing required fields'}), 400
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        user_data = loop.run_until_complete(get_user(int(user_id), None))
-        current_balance = user_data[0]
-        
-        if win:
-            new_balance = current_balance + win_amount
-        else:
-            new_balance = current_balance - bet
-        
-        loop.run_until_complete(update_balance(int(user_id), new_balance))
-        loop.run_until_complete(update_stats(int(user_id), win=win))
-        loop.run_until_complete(save_game_history(int(user_id), bet, win_amount if win else 0, game))
-        
-        async def check_achievements_async():
-            await check_achievements(int(user_id), None)
-        loop.run_until_complete(check_achievements_async())
-        
-        loop.close()
+        logger.info(f"New balance for user {user_id}: {new_balance}")
         
         response = jsonify({
             'success': True,
@@ -217,7 +171,6 @@ dp = Dispatcher(storage=storage)
 
 dp.message.middleware(UserStatusMiddleware())
 
-# Подключаем только нужные роутеры (без игр и турниров)
 dp.include_router(profile_router)
 dp.include_router(payments_router)
 dp.include_router(bot_info_router)
