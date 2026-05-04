@@ -60,6 +60,33 @@ def save_game_history_sync(user_id: int, bet: int, win_amount: int, game_type: s
     conn.commit()
     conn.close()
 
+def init_sqlite_db():
+    """Создаёт таблицы в SQLite для API"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            balance INTEGER DEFAULT 0,
+            total_games INTEGER DEFAULT 0,
+            wins INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS game_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            game_type TEXT NOT NULL,
+            bet_amount INTEGER NOT NULL,
+            win_amount INTEGER DEFAULT 0,
+            played_at INTEGER NOT NULL
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    logger.info("SQLite tables created/verified")
+
 # ---------- aiohttp сервер ----------
 app = web.Application()
 bot = Bot(token=MAIN_BOT_TOKEN)
@@ -160,6 +187,9 @@ app.router.add_post('/webhook', handle_webhook)
 
 async def main():
     port = int(os.environ.get('PORT', 10000))
+    
+    # Инициализируем SQLite таблицы
+    init_sqlite_db()
     
     await on_startup()
     
