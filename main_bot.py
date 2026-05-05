@@ -32,7 +32,6 @@ CRYPTOPAY_API_URL = 'https://pay.crypt.bot/api'
 
 # Прайс-лист: amount_points -> price_usdt
 PRICE_LIST = {
-    501: 0.1,    # Тестовый
     250: 20,
     500: 35,
     750: 50,
