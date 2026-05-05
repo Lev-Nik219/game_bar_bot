@@ -8,6 +8,7 @@ import time
 import hashlib
 import hmac
 import aiohttp
+from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -34,6 +35,9 @@ PRICE_LIST = {
     750: 50,
     1000: 65
 }
+
+CASHBACK_PERCENT = 5  # 5% от проигрышей
+CASHBACK_DAY = 6  # Воскресенье (0=ПН, 6=ВС)
 
 # ===== ДОСТИЖЕНИЯ =====
 ACHIEVEMENTS = {
@@ -686,6 +690,189 @@ async def handle_get_price_list(request):
 async def health(request):
     return web.json_response({'status': 'ok'})
 
+# ===== КЭШБЕК =====
+
+def get_weekly_losses_sync(user_id: int) -> int:
+    """Сумма проигрышей за последние 7 дней"""
+    week_ago = int(time.time()) - 7 * 86400
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COALESCE(SUM(bet_amount), 0) FROM game_history "
+            "WHERE user_id = ? AND played_at >= ? AND win_amount = 0",
+            (user_id, week_ago)
+        )
+        total = cursor.fetchone()[0]
+        conn.close()
+        return total
+    return execute_sqlite_with_retry(_do)
+
+def get_last_cashback_sync(user_id: int) -> int:
+    """Время последнего кэшбека"""
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT last_cashback FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            conn.close()
+            return row[0] if row and row[0] else 0
+        except:
+            conn.close()
+            return 0
+    return execute_sqlite_with_retry(_do)
+
+def set_last_cashback_sync(user_id: int, timestamp: int):
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN last_cashback INTEGER DEFAULT 0")
+        except:
+            pass
+        cursor.execute("UPDATE users SET last_cashback = ? WHERE user_id = ?", (timestamp, user_id))
+        conn.commit()
+        conn.close()
+    execute_sqlite_with_retry(_do)
+
+async def process_weekly_cashback():
+    """Обработка еженедельного кэшбека для всех пользователей"""
+    logger.info("🔄 Запущена обработка еженедельного кэшбека...")
+    
+    now = int(time.time())
+    week_ago = now - 7 * 86400
+    
+    def _get_users():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users")
+        users = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return users
+    
+    users = execute_sqlite_with_retry(_get_users)
+    total_cashback = 0
+    users_notified = 0
+    
+    for user_id in users:
+        try:
+            last_cb = get_last_cashback_sync(user_id)
+            # Проверяем, прошла ли неделя с последнего кэшбека
+            if last_cb > week_ago:
+                continue
+            
+            losses = get_weekly_losses_sync(user_id)
+            if losses <= 0:
+                continue
+            
+            cashback = int(losses * CASHBACK_PERCENT / 100)
+            if cashback <= 0:
+                continue
+            
+            # Начисляем кэшбек
+            current_balance = get_balance_sync(user_id)
+            new_balance = current_balance + cashback
+            update_balance_sync(user_id, new_balance)
+            set_last_cashback_sync(user_id, now)
+            
+            total_cashback += cashback
+            users_notified += 1
+            
+            # Отправляем уведомление
+            try:
+                await bot.send_message(
+                    user_id,
+                    f"💰 <b>Еженедельный кэшбек!</b>\n\n"
+                    f"📊 Ваши проигрыши за неделю: <b>{losses} 💎</b>\n"
+                    f"🔄 Кэшбек {CASHBACK_PERCENT}%: <b>+{cashback} 💎</b>\n"
+                    f"💳 Новый баланс: <b>{new_balance} 💎</b>\n\n"
+                    f"Спасибо за игру! 🎉",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify user {user_id} about cashback: {e}")
+            
+            await asyncio.sleep(0.05)  # Защита от флуда
+            
+        except Exception as e:
+            logger.error(f"Cashback error for user {user_id}: {e}")
+    
+    logger.info(f"✅ Кэшбек обработан: {users_notified} пользователей, {total_cashback} баллов")
+    
+    # Уведомляем админов
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                admin_id,
+                f"💰 <b>Еженедельный кэшбек завершён!</b>\n\n"
+                f"👥 Пользователей: {users_notified}\n"
+                f"💎 Всего начислено: {total_cashback} баллов",
+                parse_mode="HTML"
+            )
+        except:
+            pass
+
+async def cashback_scheduler():
+    """Фоновая задача: проверяет каждые 30 минут, не пора ли запустить кэшбек"""
+    while True:
+        now = datetime.now()
+        # Запускаем в воскресенье между 00:00 и 00:30
+        if now.weekday() == CASHBACK_DAY and now.hour == 0 and now.minute < 30:
+            await process_weekly_cashback()
+            # Ждём час после запуска, чтобы не сработать повторно
+            await asyncio.sleep(3600)
+        else:
+            # Проверяем каждые 30 минут
+            await asyncio.sleep(1800)
+
+async def handle_manual_cashback(request):
+    """Ручной запуск кэшбека (для админа через WebApp)"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        
+        if not user_id or int(user_id) not in ADMIN_IDS:
+            return web.json_response({'success': False, 'error': 'Access denied'}, status=403)
+        
+        # Запускаем в фоне
+        asyncio.create_task(process_weekly_cashback())
+        
+        return web.json_response({'success': True, 'message': 'Кэшбек запущен в фоновом режиме'})
+    except Exception as e:
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+async def handle_get_cashback_info(request):
+    """Информация о кэшбеке для пользователя"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        if not user_id:
+            return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
+        
+        uid = int(user_id)
+        losses = get_weekly_losses_sync(uid)
+        cashback = int(losses * CASHBACK_PERCENT / 100)
+        last_cb = get_last_cashback_sync(uid)
+        now = int(time.time())
+        week_ago = now - 7 * 86400
+        can_claim = last_cb < week_ago and cashback > 0
+        
+        return web.json_response({
+            'success': True,
+            'weekly_losses': losses,
+            'cashback_amount': cashback,
+            'percent': CASHBACK_PERCENT,
+            'last_cashback': last_cb,
+            'can_claim': can_claim
+        })
+    except Exception as e:
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
 # ===== ВСЕ РОУТЫ =====
 app.router.add_post('/api/get_balance', handle_get_balance)
 app.router.add_post('/api/get_profile', handle_get_profile)
@@ -696,6 +883,8 @@ app.router.add_post('/api/claim_ad_reward', handle_claim_ad_reward)
 app.router.add_post('/api/create_invoice', handle_create_invoice)
 app.router.add_post('/api/check_payment', handle_check_payment)
 app.router.add_post('/api/crypto_webhook', handle_crypto_webhook)
+app.router.add_post('/api/manual_cashback', handle_manual_cashback)
+app.router.add_post('/api/get_cashback_info', handle_get_cashback_info)
 app.router.add_get('/api/get_price_list', handle_get_price_list)
 app.router.add_get('/health', health)
 app.router.add_get('/', health)
@@ -732,6 +921,9 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
+        # Запускаем планировщик кэшбека
+    asyncio.create_task(cashback_scheduler())
+    logger.info("Планировщик кэшбека запущен")
     logger.info(f"HTTP сервер запущен на порту {port}")
     try:
         await asyncio.Future()

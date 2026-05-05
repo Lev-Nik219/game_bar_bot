@@ -390,6 +390,34 @@ async def admin_clear_db_confirm_callback(callback: types.CallbackQuery):
             ])
         )
 
+# ---------- ЗАПУСК КЭШБЕКА ----------
+@router.callback_query(F.data == "admin_cashback")
+async def admin_cashback_callback(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    try:
+        await callback.answer()
+    except:
+        pass
+    
+    await callback.message.edit_text(
+        "💰 <b>Запуск еженедельного кэшбека...</b>\n\n"
+        "⏳ Обработка началась. Результаты появятся в логах.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]
+        ])
+    )
+    
+    # Запускаем кэшбек
+    from main_bot import process_weekly_cashback
+    import asyncio
+    asyncio.create_task(process_weekly_cashback())
+    
+    logger.info("Кэшбек запущен админом вручную")
+
 # ---------- ОТМЕНА И НАЗАД ----------
 @router.callback_query(F.data == "admin_cancel")
 async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):

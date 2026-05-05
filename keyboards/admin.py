@@ -8,6 +8,7 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="📩 Сообщения поддержки", callback_data="admin_support_messages")],
+        [InlineKeyboardButton(text="💰 Запустить кэшбек", callback_data="admin_cashback")],
         [InlineKeyboardButton(text="🗑 Очистить базу", callback_data="admin_clear_db")],
     ])
 
