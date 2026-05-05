@@ -114,22 +114,156 @@ def create_payment(user_id: int, amount_points: int, price_usdt: float, payment_
     conn.commit()
     conn.close()
 
-def confirm_payment(payment_id: str):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id, amount_points, status FROM crypto_payments WHERE payment_id = ?", (payment_id,))
-    row = cursor.fetchone()
-    if not row or row[2] != 'pending':
-        conn.close()
-        return None
-    user_id, amount_points, _ = row
-    cursor.execute("UPDATE crypto_payments SET status = 'paid' WHERE payment_id = ?", (payment_id,))
-    current_balance = get_balance_sync(user_id)
-    update_balance_sync(user_id, current_balance + amount_points)
-    conn.commit()
-    conn.close()
-    return (user_id, amount_points)
+# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ SQLite =====
 
+def execute_sqlite_with_retry(func, max_retries=5, delay=0.5):
+    """Выполняет функцию с повторными попытками при блокировке БД"""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except sqlite3.OperationalError as e:
+            if 'locked' in str(e).lower() and attempt < max_retries - 1:
+                logger.warning(f"SQLite locked, retry {attempt + 1}/{max_retries}...")
+                time.sleep(delay * (attempt + 1))
+            else:
+                raise
+    raise Exception("SQLite still locked after retries")
+
+def get_balance_sync(user_id: int):
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    return execute_sqlite_with_retry(_do)
+
+def update_balance_sync(user_id: int, new_balance: int):
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id))
+        conn.commit()
+        conn.close()
+    return execute_sqlite_with_retry(_do)
+
+def update_stats_sync(user_id: int, win: bool):
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute("SELECT total_games, wins FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        if row:
+            total_games, wins = row
+            new_total = total_games + 1
+            new_wins = wins + (1 if win else 0)
+            cursor.execute("UPDATE users SET total_games = ?, wins = ? WHERE user_id = ?", (new_total, new_wins, user_id))
+        conn.commit()
+        conn.close()
+    return execute_sqlite_with_retry(_do)
+
+def save_game_history_sync(user_id: int, bet: int, win_amount: int, game_type: str):
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO game_history (user_id, game_type, bet_amount, win_amount, played_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, game_type, bet, win_amount, int(time.time()))
+        )
+        conn.commit()
+        conn.close()
+    return execute_sqlite_with_retry(_do)
+
+def get_last_ad_time_sync(user_id: int):
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute("SELECT last_ad_watch FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row else 0
+    return execute_sqlite_with_retry(_do)
+
+def set_last_ad_time_sync(user_id: int, timestamp: int):
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET last_ad_watch = ? WHERE user_id = ?", (timestamp, user_id))
+        conn.commit()
+        conn.close()
+    return execute_sqlite_with_retry(_do)
+
+def get_pending_payment(user_id: int):
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT payment_id, amount_points, status, invoice_id FROM crypto_payments WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+            (user_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row
+    return execute_sqlite_with_retry(_do)
+
+def create_payment(user_id: int, amount_points: int, price_usdt: float, payment_id: str, invoice_id: str):
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO crypto_payments (user_id, amount_points, price_usdt, payment_id, invoice_id, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (user_id, amount_points, price_usdt, payment_id, invoice_id, int(time.time()))
+        )
+        conn.commit()
+        conn.close()
+    return execute_sqlite_with_retry(_do)
+
+def confirm_payment(payment_id: str):
+    """Подтверждает платёж с защитой от блокировок"""
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        
+        # Проверяем статус
+        cursor.execute("SELECT user_id, amount_points, status FROM crypto_payments WHERE payment_id = ?", (payment_id,))
+        row = cursor.fetchone()
+        if not row or row[2] != 'pending':
+            conn.close()
+            return None
+        
+        user_id, amount_points, _ = row
+        
+        # Обновляем статус платежа
+        cursor.execute("UPDATE crypto_payments SET status = 'paid' WHERE payment_id = ?", (payment_id,))
+        
+        # Начисляем баллы
+        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+        balance_row = cursor.fetchone()
+        current_balance = balance_row[0] if balance_row else 0
+        new_balance = current_balance + amount_points
+        cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id))
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Payment {payment_id} confirmed: user {user_id}, +{amount_points}, balance {new_balance}")
+        return (user_id, amount_points)
+    
+    try:
+        return execute_sqlite_with_retry(_do, max_retries=10, delay=0.3)
+    except Exception as e:
+        logger.error(f"Failed to confirm payment {payment_id}: {e}")
+        return None
 def init_sqlite_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
