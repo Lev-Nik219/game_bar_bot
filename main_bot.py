@@ -280,8 +280,35 @@ async def handle_get_balance(request):
         user_id = data.get('user_id')
         if not user_id:
             return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
-        balance = get_balance_sync(int(user_id))
+        
+        uid = int(user_id)
+        
+        def _do():
+            conn = sqlite3.connect(DB_NAME, timeout=10)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            cursor = conn.cursor()
+            
+            # Проверяем существует ли пользователь
+            cursor.execute("SELECT balance, total_games FROM users WHERE user_id = ?", (uid,))
+            row = cursor.fetchone()
+            
+            if not row:
+                # Новый пользователь — даём 50 бонусных баллов
+                cursor.execute(
+                    "INSERT INTO users (user_id, balance, total_games, wins, avatar_emoji) VALUES (?, 50, 0, 0, '🦊')",
+                    (uid,)
+                )
+                conn.commit()
+                conn.close()
+                logger.info(f"New user {uid} created with 50 bonus points!")
+                return 50
+            
+            conn.close()
+            return row[0]
+        
+        balance = execute_sqlite_with_retry(_do)
         return web.json_response({'success': True, 'balance': balance})
+        
     except Exception as e:
         logger.error(f"get_balance error: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
