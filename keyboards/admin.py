@@ -8,6 +8,7 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="📩 Сообщения поддержки", callback_data="admin_support_messages")],
+        [InlineKeyboardButton(text="🗑 Очистить базу", callback_data="admin_clear_db")],
     ])
 
 def admin_stats_keyboard() -> InlineKeyboardMarkup:
@@ -42,3 +43,10 @@ def users_list_keyboard(users, page, total_pages) -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+def clear_db_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения очистки базы"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⚠️ ДА, ОЧИСТИТЬ ВСЁ", callback_data="admin_clear_db_confirm")],
+        [InlineKeyboardButton(text="❌ ОТМЕНА", callback_data="admin_back")]
+    ])

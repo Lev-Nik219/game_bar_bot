@@ -9,7 +9,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import ADMIN_IDS
 from database import get_user, update_balance, get_user_stats, get_all_users, get_users_count, execute_query, get_deposit_stats
 from keyboards.admin import (
-    admin_main_keyboard, admin_stats_keyboard, admin_stats_back_keyboard, users_list_keyboard
+    admin_main_keyboard, admin_stats_keyboard, admin_stats_back_keyboard, 
+    users_list_keyboard, clear_db_confirm_keyboard
 )
 
 router = Router()
@@ -303,6 +304,82 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Массовая рассылка завершена.\n\n📨 Успешно: {success}\n❌ Неудачно: {failed}")
     await state.clear()
     await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
+
+# ---------- ОЧИСТКА БАЗЫ ДАННЫХ ----------
+@router.callback_query(F.data == "admin_clear_db")
+async def admin_clear_db_callback(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    await callback.message.edit_text(
+        "⚠️ <b>ВНИМАНИЕ!</b>\n\n"
+        "Вы собираетесь <b>ПОЛНОСТЬЮ ОЧИСТИТЬ</b> базу данных!\n\n"
+        "Будут удалены:\n"
+        "• Все пользователи\n"
+        "• Вся история игр\n"
+        "• Все платежи\n"
+        "• Все сообщения поддержки\n\n"
+        "<b>Это действие НЕВОЗМОЖНО отменить!</b>\n\n"
+        "Вы уверены?",
+        parse_mode="HTML",
+        reply_markup=clear_db_confirm_keyboard()
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "admin_clear_db_confirm")
+async def admin_clear_db_confirm_callback(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("❌ Доступ запрещён", show_alert=True)
+        return
+    
+    await callback.answer("⏳ Очищаем базу данных...")
+    
+    try:
+        import sqlite3
+        import time
+        from main_bot import DB_NAME
+        
+        # Создаём бэкап перед удалением
+        backup_name = f"casino_backup_{int(time.time())}.db"
+        import shutil
+        shutil.copy2(DB_NAME, backup_name)
+        
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        # Очищаем все таблицы
+        cursor.execute("DELETE FROM users")
+        cursor.execute("DELETE FROM game_history")
+        cursor.execute("DELETE FROM crypto_payments")
+        cursor.execute("DELETE FROM support_messages")
+        
+        # Сбрасываем автоинкремент
+        cursor.execute("DELETE FROM sqlite_sequence")
+        
+        conn.commit()
+        conn.close()
+        
+        await callback.message.edit_text(
+            f"✅ <b>База данных полностью очищена!</b>\n\n"
+            f"📁 Создан бэкап: <code>{backup_name}</code>\n\n"
+            f"Все таблицы пусты. Новые пользователи будут получать 50 бонусных баллов.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]
+            ])
+        )
+        
+        # Уведомление в терминал
+        print(f"✅ БАЗА ДАННЫХ ОЧИЩЕНА! Бэкап сохранён в {backup_name}")
+        
+    except Exception as e:
+        await callback.message.edit_text(
+            f"❌ <b>Ошибка при очистке базы:</b>\n\n<code>{str(e)}</code>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]
+            ])
+        )
 
 # ---------- ОТМЕНА И НАЗАД ----------
 @router.callback_query(F.data == "admin_cancel")
