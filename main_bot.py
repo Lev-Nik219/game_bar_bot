@@ -223,7 +223,7 @@ async def handle_get_balance(request):
         def _do():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
             c.execute("SELECT balance,total_games FROM users WHERE user_id=?",(uid,));r=c.fetchone()
-            if not r: c.execute("INSERT INTO users(user_id,balance,total_games,wins,avatar_emoji) VALUES(?,50,0,0,'🦊')",(uid,));conn.commit();conn.close();return 50
+            if not r: c.execute("INSERT INTO users(user_id,balance,total_games,wins,avatar_emoji) VALUES(?,20,0,0,'🦊')",(uid,));conn.commit();conn.close();return 20
             conn.close();return r[0]
         bal=execute_sqlite_with_retry(_do);return web.json_response({'success':True,'balance':bal})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
