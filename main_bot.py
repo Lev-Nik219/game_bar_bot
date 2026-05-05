@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 DB_NAME = "casino.db"
 
 AD_REWARD_AMOUNT = 25
+FREE_BONUS_AMOUNT = 10
 AD_COOLDOWN_SECONDS = 20
 
 CRYPTOPAY_TOKEN = os.environ.get('CRYPTOPAY_TOKEN', '455143:AA35WjAeKxzuurvYbMCZewcqzQ7VmtAQbDZ')
@@ -40,7 +41,6 @@ DAILY_BONUS_STREAK_MULTIPLIER = 1
 CASHBACK_PERCENT = 5
 CASHBACK_DAY = 6
 
-# ===== ДОСТИЖЕНИЯ =====
 ACHIEVEMENTS = {
     'first_game':{'name':'🎮 Первая игра','desc':'Сыграть первую игру','icon':'🎮','target':1},
     '10_games':{'name':'🎰 Игрок','desc':'Сыграть 10 игр','icon':'🎰','target':10},
@@ -57,7 +57,6 @@ ACHIEVEMENTS = {
     'depositor':{'name':'📥 Инвестор','desc':'Пополнить баланс','icon':'📥','target':1},
 }
 
-# ===== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ =====
 def execute_sqlite_with_retry(func, max_retries=5, delay=0.5):
     for attempt in range(max_retries):
         try: return func()
@@ -203,6 +202,36 @@ def get_daily_bonus_status_sync(uid):
         conn.close();return {'can_claim':can,'streak':streak if last>=today_start-86400 else 0,'next_bonus':next_bonus}
     return execute_sqlite_with_retry(_do)
 
+def get_last_ad_time_sync(uid):
+    def _do():
+        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+        c.execute("SELECT last_ad_watch FROM users WHERE user_id=?",(uid,));r=c.fetchone();conn.close();return r[0] if r else 0
+    return execute_sqlite_with_retry(_do)
+
+def set_last_ad_time_sync(uid, ts):
+    def _do():
+        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+        c.execute("UPDATE users SET last_ad_watch=? WHERE user_id=?",(ts,uid));conn.commit();conn.close()
+    execute_sqlite_with_retry(_do)
+
+def create_payment(user_id, amount_points, price_usdt, payment_id, invoice_id):
+    def _do():
+        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+        c.execute("INSERT INTO crypto_payments(user_id,amount_points,price_usdt,payment_id,invoice_id,status,created_at) VALUES(?,?,?,?,?,'pending',?)",(user_id,amount_points,price_usdt,payment_id,invoice_id,int(time.time())));conn.commit();conn.close()
+    execute_sqlite_with_retry(_do)
+
+def confirm_payment(payment_id):
+    def _do():
+        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+        c.execute("SELECT user_id,amount_points,status FROM crypto_payments WHERE payment_id=?",(payment_id,));r=c.fetchone()
+        if not r or r[2]!='pending': conn.close();return None
+        uid,amount,_=r
+        c.execute("UPDATE crypto_payments SET status='paid' WHERE payment_id=?",(payment_id,))
+        c.execute("SELECT balance FROM users WHERE user_id=?",(uid,));bal=c.fetchone()[0]
+        c.execute("UPDATE users SET balance=? WHERE user_id=?",(bal+amount,uid))
+        conn.commit();conn.close();check_depositor_achievement(uid);return (uid,amount)
+    return execute_sqlite_with_retry(_do, max_retries=10, delay=0.3)
+
 def init_sqlite_db():
     conn=sqlite3.connect(DB_NAME);c=conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users(user_id INTEGER PRIMARY KEY,username TEXT,balance INTEGER DEFAULT 0,total_games INTEGER DEFAULT 0,wins INTEGER DEFAULT 0,last_ad_watch INTEGER DEFAULT 0)''')
@@ -215,11 +244,9 @@ def init_sqlite_db():
         except: pass
     conn.commit();conn.close()
 
-# ========== TELEGRAM BOT ==========
 bot=Bot(token=MAIN_BOT_TOKEN);storage=MemoryStorage();dp=Dispatcher(storage=storage)
 dp.include_router(support_router);dp.include_router(admin_router);dp.include_router(user_router)
 
-# ========== AIOHTTP SERVER ==========
 app=web.Application()
 @web.middleware
 async def cors_middleware(request,handler):
@@ -227,8 +254,6 @@ async def cors_middleware(request,handler):
         resp=web.Response();resp.headers['Access-Control-Allow-Origin']='*';resp.headers['Access-Control-Allow-Methods']='POST,GET,OPTIONS';resp.headers['Access-Control-Allow-Headers']='Content-Type,crypto-pay-api-sign';return resp
     resp=await handler(request);resp.headers['Access-Control-Allow-Origin']='*';return resp
 app.middlewares.append(cors_middleware)
-
-# ===== API HANDLERS =====
 
 async def handle_get_balance(request):
     try:
@@ -359,28 +384,133 @@ async def handle_claim_ad_reward(request):
     try:
         data=await request.json();uid=int(data.get('user_id'))
         if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        return web.json_response({'success':False,'error':'Ads unavailable'},status=200)
+        last_ad=get_last_ad_time_sync(uid);now=int(time.time())
+        if last_ad and now-last_ad<AD_COOLDOWN_SECONDS:
+            remaining=AD_COOLDOWN_SECONDS-(now-last_ad)
+            return web.json_response({'success':False,'error':'cooldown','remaining':remaining},status=200)
+        cur=get_balance_sync(uid);new=cur+AD_REWARD_AMOUNT
+        update_balance_sync(uid,new);set_last_ad_time_sync(uid,now)
+        return web.json_response({'success':True,'new_balance':new,'reward':AD_REWARD_AMOUNT})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
+
+async def handle_claim_free_bonus(request):
+    try:
+        data=await request.json();uid=int(data.get('user_id'))
+        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
+        last_ad=get_last_ad_time_sync(uid);now=int(time.time())
+        if last_ad and now-last_ad<AD_COOLDOWN_SECONDS:
+            remaining=AD_COOLDOWN_SECONDS-(now-last_ad)
+            return web.json_response({'success':False,'error':'cooldown','remaining':remaining},status=200)
+        cur=get_balance_sync(uid);new=cur+FREE_BONUS_AMOUNT
+        update_balance_sync(uid,new);set_last_ad_time_sync(uid,now)
+        return web.json_response({'success':True,'new_balance':new,'reward':FREE_BONUS_AMOUNT})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
+
+async def handle_create_invoice(request):
+    try:
+        data=await request.json();uid=int(data.get('user_id'));amount_points=data.get('amount_points')
+        if not uid or not amount_points: return web.json_response({'success':False,'error':'user_id and amount_points required'},status=400)
+        amount_points=int(amount_points)
+        if amount_points not in PRICE_LIST: return web.json_response({'success':False,'error':'Invalid amount'},status=400)
+        price_usdt=PRICE_LIST[amount_points]
+        async with aiohttp.ClientSession() as session:
+            headers={'Crypto-Pay-API-Token':CRYPTOPAY_TOKEN,'Content-Type':'application/json'}
+            payload={'asset':'USDT','amount':str(price_usdt),'description':f'Пополнение {amount_points} баллов для Game Bar Casino','payload':json.dumps({'user_id':uid,'amount_points':amount_points}),'allow_comments':False,'allow_anonymous':False}
+            try:
+                async with session.post(f'{CRYPTOPAY_API_URL}/createInvoice',json=payload,headers=headers) as resp: result=await resp.json()
+            except Exception as e: return web.json_response({'success':False,'error':f'CryptoPay API error: {str(e)}'},status=500)
+            if not result.get('ok'): return web.json_response({'success':False,'error':f'CryptoPay error: {result.get("error","unknown")}'},status=500)
+            invoice=result['result'];payment_id=str(invoice['invoice_id']);invoice_url=invoice['pay_url']
+            create_payment(uid,amount_points,price_usdt,payment_id,str(invoice['invoice_id']))
+            return web.json_response({'success':True,'payment_id':payment_id,'invoice_url':invoice_url,'amount_points':amount_points,'price_usdt':price_usdt})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
+
+async def handle_check_payment(request):
+    try:
+        data=await request.json();payment_id=data.get('payment_id');uid=data.get('user_id')
+        if not payment_id and uid:
+            def _find():
+                conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+                c.execute("SELECT payment_id,amount_points,status FROM crypto_payments WHERE user_id=? AND status='pending' ORDER BY created_at DESC LIMIT 1",(int(uid),));r=c.fetchone();conn.close();return r
+            row=execute_sqlite_with_retry(_find)
+            if not row:
+                def _find_paid():
+                    conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+                    c.execute("SELECT payment_id,amount_points FROM crypto_payments WHERE user_id=? AND status='paid' ORDER BY created_at DESC LIMIT 1",(int(uid),));paid_row=c.fetchone();conn.close();return paid_row
+                paid_row=execute_sqlite_with_retry(_find_paid)
+                if paid_row:
+                    new_balance=get_balance_sync(int(uid))
+                    return web.json_response({'success':True,'status':'already_credited','message':f'✅ Баллы уже начислены! ({paid_row[1]} 💎)','new_balance':new_balance,'amount_points':paid_row[1]})
+                return web.json_response({'success':True,'status':'no_pending','message':'Нет ожидающих платежей.'})
+            payment_id=row[0]
+        if not payment_id: return web.json_response({'success':False,'error':'payment_id required'},status=400)
+        def _check_local():
+            conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+            c.execute("SELECT user_id,amount_points,status FROM crypto_payments WHERE payment_id=?",(payment_id,));r=c.fetchone();conn.close();return r
+        row=execute_sqlite_with_retry(_check_local)
+        if row and row[2]=='paid':
+            new_balance=get_balance_sync(row[0])
+            return web.json_response({'success':True,'status':'paid','amount_points':row[1],'new_balance':new_balance,'message':f'✅ Начислено {row[1]} баллов!'})
+        async with aiohttp.ClientSession() as session:
+            headers={'Crypto-Pay-API-Token':CRYPTOPAY_TOKEN,'Content-Type':'application/json'}
+            params={'invoice_ids':payment_id}
+            try:
+                async with session.get(f'{CRYPTOPAY_API_URL}/getInvoices',params=params,headers=headers,timeout=10) as resp: result=await resp.json()
+            except Exception: return web.json_response({'success':True,'status':'api_error','message':'⏳ Ошибка связи с CryptoPay.'})
+            if not result.get('ok') or not result['result']['items']: return web.json_response({'success':True,'status':'not_found','message':'❌ Счёт не найден.'})
+            invoice=result['result']['items'][0]
+            if invoice['status']=='paid':
+                confirmed=confirm_payment(payment_id)
+                if confirmed:
+                    uid,amount=confirmed;new_balance=get_balance_sync(uid)
+                    return web.json_response({'success':True,'status':'paid','user_id':uid,'amount_points':amount,'new_balance':new_balance,'message':f'✅ Начислено {amount} баллов!'})
+                return web.json_response({'success':True,'status':'already_credited','message':'✅ Баллы уже начислены.'})
+            return web.json_response({'success':True,'status':invoice['status'],'message':f'⏳ Статус: {invoice["status"]}.'})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
+
+async def handle_crypto_webhook(request):
+    try:
+        body=await request.text();signature=request.headers.get('crypto-pay-api-sign','')
+        secret=hashlib.sha256(CRYPTOPAY_TOKEN.encode()).digest()
+        expected_signature=hmac.new(secret,body.encode(),hashlib.sha256).hexdigest()
+        if signature!=expected_signature: return web.json_response({'error':'Invalid signature'},status=403)
+        data=json.loads(body)
+        if data.get('update_type')=='invoice_paid':
+            invoice_id=str(data['payload']['invoice_id']);confirmed=confirm_payment(invoice_id)
+            if confirmed:
+                uid,amount=confirmed
+                try: await bot.send_message(uid,f"✅ <b>Платёж подтверждён!</b>\n\n💰 Начислено: <b>{amount} 💎</b>\n💵 Сумма: <b>{PRICE_LIST.get(amount,'?')} USDT</b>\n\nСпасибо за пополнение! 🎉",parse_mode="HTML")
+                except: pass
+        return web.json_response({'success':True})
+    except Exception as e: return web.json_response({'error':str(e)},status=500)
+
+async def handle_get_price_list(request):
+    return web.json_response({'success':True,'prices':{str(k):v for k,v in PRICE_LIST.items()}})
 
 async def health(request): return web.json_response({'status':'ok'})
 
-# ===== ROUTES =====
 app.router.add_post('/api/get_balance',handle_get_balance)
 app.router.add_post('/api/get_profile',handle_get_profile)
 app.router.add_post('/api/get_achievements',handle_get_achievements)
 app.router.add_post('/api/save_profile',handle_save_profile)
 app.router.add_post('/api/game_result',handle_game_result)
 app.router.add_post('/api/claim_ad_reward',handle_claim_ad_reward)
-app.router.add_post('/api/referral_join', handle_referral_join)
-app.router.add_post('/api/get_referral_stats', handle_get_referral_stats)
-app.router.add_post('/api/get_referral_link', handle_get_referral_link)
+app.router.add_post('/api/claim_free_bonus',handle_claim_free_bonus)
+app.router.add_post('/api/referral_join',handle_referral_join)
+app.router.add_post('/api/get_referral_stats',handle_get_referral_stats)
+app.router.add_post('/api/get_referral_link',handle_get_referral_link)
 app.router.add_post('/api/get_admin_referral_stats',handle_get_admin_referral_stats)
 app.router.add_post('/api/daily_bonus',handle_daily_bonus)
 app.router.add_post('/api/daily_bonus_status',handle_daily_bonus_status)
+app.router.add_post('/api/create_invoice',handle_create_invoice)
+app.router.add_post('/api/check_payment',handle_check_payment)
+app.router.add_post('/api/crypto_webhook',handle_crypto_webhook)
+app.router.add_get('/api/get_price_list',handle_get_price_list)
 app.router.add_get('/health',health);app.router.add_get('/',health)
 
 async def handle_webhook(request):
     update=types.Update(**await request.json());await dp.feed_update(bot,update);return web.Response()
+
 app.router.add_post('/webhook',handle_webhook)
 
 async def on_startup():
