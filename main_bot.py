@@ -196,6 +196,81 @@ async def handle_claim_ad_reward(request):
         return web.json_response({'success': True, 'new_balance': new_balance, 'reward': AD_REWARD_AMOUNT})
     except Exception as e:
         return web.json_response({'success': False, 'error': str(e)}, status=500)
+    
+async def handle_get_profile(request):
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        if not user_id:
+            return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
+        
+        uid = int(user_id)
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        # Основная статистика
+        cursor.execute("SELECT balance, total_games, wins FROM users WHERE user_id = ?", (uid,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return web.json_response({'success': False, 'error': 'User not found'}, status=404)
+        
+        balance, total_games, wins = row
+        losses = total_games - wins
+        winrate = round(wins / total_games * 100, 1) if total_games > 0 else 0
+        
+        # Последние игры
+        cursor.execute(
+            "SELECT game_type, bet_amount, win_amount, played_at FROM game_history "
+            "WHERE user_id = ? ORDER BY played_at DESC LIMIT 10",
+            (uid,)
+        )
+        games = cursor.fetchall()
+        
+        recent_games = []
+        for game_type, bet, win_amount, timestamp in games:
+            recent_games.append({
+                'game': game_type,
+                'bet': bet,
+                'win_amount': win_amount,
+                'result': 'win' if win_amount > 0 else 'lose',
+                'time': timestamp
+            })
+        
+        # Статистика по типам игр
+        cursor.execute(
+            "SELECT game_type, COUNT(*), SUM(CASE WHEN win_amount > 0 THEN 1 ELSE 0 END) "
+            "FROM game_history WHERE user_id = ? GROUP BY game_type",
+            (uid,)
+        )
+        game_stats = cursor.fetchall()
+        
+        games_by_type = {}
+        for gtype, count, gwins in game_stats:
+            games_by_type[gtype] = {
+                'total': count,
+                'wins': gwins or 0
+            }
+        
+        conn.close()
+        
+        return web.json_response({
+            'success': True,
+            'profile': {
+                'user_id': uid,
+                'balance': balance,
+                'total_games': total_games,
+                'wins': wins,
+                'losses': losses,
+                'winrate': winrate,
+                'recent_games': recent_games,
+                'games_by_type': games_by_type
+            }
+        })
+    except Exception as e:
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+    
+app.router.add_post('/api/get_profile', handle_get_profile)
 
 async def health(request):
     return web.json_response({'status': 'ok'})
