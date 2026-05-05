@@ -1,5 +1,7 @@
 import asyncio
 import time
+import logging
+logger = logging.getLogger(__name__)
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -311,6 +313,12 @@ async def admin_clear_db_callback(callback: types.CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
+    
+    try:
+        await callback.answer()
+    except:
+        pass
+    
     await callback.message.edit_text(
         "⚠️ <b>ВНИМАНИЕ!</b>\n\n"
         "Вы собираетесь <b>ПОЛНОСТЬЮ ОЧИСТИТЬ</b> базу данных!\n\n"
@@ -324,7 +332,6 @@ async def admin_clear_db_callback(callback: types.CallbackQuery):
         parse_mode="HTML",
         reply_markup=clear_db_confirm_keyboard()
     )
-    await callback.answer()
 
 @router.callback_query(F.data == "admin_clear_db_confirm")
 async def admin_clear_db_confirm_callback(callback: types.CallbackQuery):
@@ -332,28 +339,30 @@ async def admin_clear_db_confirm_callback(callback: types.CallbackQuery):
         await callback.answer("❌ Доступ запрещён", show_alert=True)
         return
     
-    await callback.answer("⏳ Очищаем базу данных...")
+    # Отвечаем на callback БЕЗ длинного текста, чтобы избежать таймаута
+    try:
+        await callback.answer()
+    except:
+        pass
     
     try:
         import sqlite3
         import time
-        from main_bot import DB_NAME
-        
-        # Создаём бэкап перед удалением
-        backup_name = f"casino_backup_{int(time.time())}.db"
         import shutil
-        shutil.copy2(DB_NAME, backup_name)
         
-        conn = sqlite3.connect(DB_NAME)
+        # Создаём бэкап
+        backup_name = f"casino_backup_{int(time.time())}.db"
+        shutil.copy2("casino.db", backup_name)
+        
+        # Очищаем базу
+        conn = sqlite3.connect("casino.db")
+        conn.execute("PRAGMA busy_timeout = 10000")
         cursor = conn.cursor()
         
-        # Очищаем все таблицы
         cursor.execute("DELETE FROM users")
         cursor.execute("DELETE FROM game_history")
         cursor.execute("DELETE FROM crypto_payments")
         cursor.execute("DELETE FROM support_messages")
-        
-        # Сбрасываем автоинкремент
         cursor.execute("DELETE FROM sqlite_sequence")
         
         conn.commit()
@@ -361,20 +370,20 @@ async def admin_clear_db_confirm_callback(callback: types.CallbackQuery):
         
         await callback.message.edit_text(
             f"✅ <b>База данных полностью очищена!</b>\n\n"
-            f"📁 Создан бэкап: <code>{backup_name}</code>\n\n"
-            f"Все таблицы пусты. Новые пользователи будут получать 50 бонусных баллов.",
+            f"📁 Бэкап сохранён: <code>{backup_name}</code>\n\n"
+            f"Все таблицы пусты.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]
             ])
         )
         
-        # Уведомление в терминал
-        print(f"✅ БАЗА ДАННЫХ ОЧИЩЕНА! Бэкап сохранён в {backup_name}")
+        logger.info(f"БАЗА ДАННЫХ ОЧИЩЕНА! Бэкап: {backup_name}")
         
     except Exception as e:
+        logger.error(f"Clear DB error: {e}")
         await callback.message.edit_text(
-            f"❌ <b>Ошибка при очистке базы:</b>\n\n<code>{str(e)}</code>",
+            f"❌ <b>Ошибка при очистке:</b>\n\n<code>{str(e)}</code>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]

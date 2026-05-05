@@ -50,3 +50,4 @@ def clear_db_confirm_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⚠️ ДА, ОЧИСТИТЬ ВСЁ", callback_data="admin_clear_db_confirm")],
         [InlineKeyboardButton(text="❌ ОТМЕНА", callback_data="admin_back")]
     ])
+
