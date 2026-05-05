@@ -34,6 +34,9 @@ PRICE_LIST = {250:20,500:35,750:50,1000:65}
 REFERRAL_BONUS_INVITER = 100
 REFERRAL_BONUS_INVITED = 25
 
+DAILY_BONUS_BASE = 10
+DAILY_BONUS_STREAK_MULTIPLIER = 1
+
 CASHBACK_PERCENT = 5
 CASHBACK_DAY = 6
 
@@ -157,28 +160,48 @@ def get_referral_stats_sync(uid):
         return {'total':total,'played':played,'friends':friends}
     return execute_sqlite_with_retry(_do)
 
-def get_weekly_losses_sync(uid):
-    week_ago=int(time.time())-7*86400
+def get_admin_referral_stats_sync():
     def _do():
         conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
-        c.execute("SELECT COALESCE(SUM(bet_amount),0) FROM game_history WHERE user_id=? AND played_at>=? AND win_amount=0",(uid,week_ago))
-        total=c.fetchone()[0];conn.close();return total
+        c.execute("SELECT COUNT(*) FROM users WHERE invited_by IS NOT NULL");total_refs=c.fetchone()[0]
+        c.execute("SELECT COUNT(DISTINCT invited_by) FROM users WHERE invited_by IS NOT NULL");active_refs=c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM users WHERE referral_claimed=1");claimed=c.fetchone()[0]
+        c.execute("SELECT u.user_id,u.username,u.referral_count,u.balance FROM users u WHERE u.referral_count>0 ORDER BY u.referral_count DESC LIMIT 20")
+        top=[{'user_id':r[0],'username':r[1] or f'ID{r[0]}','count':r[2] or 0,'balance':r[3] or 0} for r in c.fetchall()]
+        c.execute("SELECT COALESCE(SUM(referral_count),0) FROM users");total_ref_earnings=c.fetchone()[0]*REFERRAL_BONUS_INVITER
+        conn.close()
+        return {'total_referrals':total_refs,'active_referrers':active_refs,'claimed_rewards':claimed,'top_referrers':top,'total_earnings':total_ref_earnings}
     return execute_sqlite_with_retry(_do)
 
-def get_last_cashback_sync(uid):
+def claim_daily_bonus_sync(uid):
+    now=int(time.time());today_start=now-(now%86400)
     def _do():
         conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
-        try: c.execute("SELECT last_cashback FROM users WHERE user_id=?",(uid,));r=c.fetchone();conn.close();return r[0] if r and r[0] else 0
-        except: conn.close();return 0
-    return execute_sqlite_with_retry(_do)
-
-def set_last_cashback_sync(uid,ts):
-    def _do():
-        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
-        try: c.execute("ALTER TABLE users ADD COLUMN last_cashback INTEGER DEFAULT 0")
+        try: c.execute("ALTER TABLE users ADD COLUMN daily_bonus_last INTEGER DEFAULT 0")
         except: pass
-        c.execute("UPDATE users SET last_cashback=? WHERE user_id=?",(ts,uid));conn.commit();conn.close()
-    execute_sqlite_with_retry(_do)
+        try: c.execute("ALTER TABLE users ADD COLUMN daily_bonus_streak INTEGER DEFAULT 0")
+        except: pass
+        c.execute("SELECT daily_bonus_last,daily_bonus_streak,balance FROM users WHERE user_id=?",(uid,));r=c.fetchone()
+        if not r: conn.close();return None
+        last,streak,bal=r[0] or 0,r[1] or 0,r[2]
+        if last>=today_start: conn.close();return {'success':False,'error':'already_claimed','next':today_start+86400}
+        yesterday=today_start-86400;new_streak=streak+1 if last>=yesterday else 1
+        bonus=DAILY_BONUS_BASE+min(new_streak-1,7)*5
+        new_bal=bal+bonus
+        c.execute("UPDATE users SET daily_bonus_last=?,daily_bonus_streak=?,balance=? WHERE user_id=?",(now,new_streak,new_bal,uid))
+        conn.commit();conn.close();return {'success':True,'bonus':bonus,'streak':new_streak,'new_balance':new_bal}
+    return execute_sqlite_with_retry(_do)
+
+def get_daily_bonus_status_sync(uid):
+    now=int(time.time());today_start=now-(now%86400)
+    def _do():
+        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+        c.execute("SELECT daily_bonus_last,daily_bonus_streak FROM users WHERE user_id=?",(uid,));r=c.fetchone()
+        if not r: conn.close();return {'can_claim':True,'streak':0,'next_bonus':10}
+        last,streak=r[0] or 0,r[1] or 0
+        can=last<today_start;next_bonus=DAILY_BONUS_BASE+min(streak,7)*5
+        conn.close();return {'can_claim':can,'streak':streak if last>=today_start-86400 else 0,'next_bonus':next_bonus}
+    return execute_sqlite_with_retry(_do)
 
 def init_sqlite_db():
     conn=sqlite3.connect(DB_NAME);c=conn.cursor()
@@ -187,18 +210,9 @@ def init_sqlite_db():
     c.execute('''CREATE TABLE IF NOT EXISTS support_messages(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,message TEXT NOT NULL,created_at INTEGER NOT NULL,is_read INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS crypto_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,amount_points INTEGER NOT NULL,price_usdt REAL NOT NULL,payment_id TEXT UNIQUE NOT NULL,invoice_id TEXT,status TEXT DEFAULT 'pending',created_at INTEGER NOT NULL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS achievements(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,achievement_id TEXT NOT NULL,achieved_at INTEGER NOT NULL,UNIQUE(user_id,achievement_id))''')
-    try: c.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
-    except: pass
-    try: c.execute("ALTER TABLE users ADD COLUMN avatar_emoji TEXT DEFAULT '🦊'")
-    except: pass
-    try: c.execute("ALTER TABLE users ADD COLUMN invited_by INTEGER DEFAULT NULL")
-    except: pass
-    try: c.execute("ALTER TABLE users ADD COLUMN referral_claimed INTEGER DEFAULT 0")
-    except: pass
-    try: c.execute("ALTER TABLE users ADD COLUMN referral_count INTEGER DEFAULT 0")
-    except: pass
-    try: c.execute("ALTER TABLE users ADD COLUMN last_cashback INTEGER DEFAULT 0")
-    except: pass
+    for col,typ in [('display_name','TEXT'),('avatar_emoji',"TEXT DEFAULT '🦊'"),('invited_by','INTEGER DEFAULT NULL'),('referral_claimed','INTEGER DEFAULT 0'),('referral_count','INTEGER DEFAULT 0'),('last_cashback','INTEGER DEFAULT 0'),('daily_bonus_last','INTEGER DEFAULT 0'),('daily_bonus_streak','INTEGER DEFAULT 0')]:
+        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+        except: pass
     conn.commit();conn.close()
 
 # ========== TELEGRAM BOT ==========
@@ -222,7 +236,7 @@ async def handle_get_balance(request):
         if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
         def _do():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
-            c.execute("SELECT balance,total_games FROM users WHERE user_id=?",(uid,));r=c.fetchone()
+            c.execute("SELECT balance FROM users WHERE user_id=?",(uid,));r=c.fetchone()
             if not r: c.execute("INSERT INTO users(user_id,balance,total_games,wins,avatar_emoji) VALUES(?,20,0,0,'🦊')",(uid,));conn.commit();conn.close();return 20
             conn.close();return r[0]
         bal=execute_sqlite_with_retry(_do);return web.json_response({'success':True,'balance':bal})
@@ -315,13 +329,30 @@ async def handle_get_referral_link(request):
         return web.json_response({'success':True,'link':link,'user_id':uid})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
-async def handle_get_cashback_info(request):
+async def handle_get_admin_referral_stats(request):
+    try:
+        data=await request.json();uid=int(data.get('user_id','0'))
+        if uid not in ADMIN_IDS: return web.json_response({'success':False,'error':'Access denied'},status=403)
+        stats=get_admin_referral_stats_sync()
+        return web.json_response({'success':True,'stats':stats})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
+
+async def handle_daily_bonus(request):
     try:
         data=await request.json();uid=int(data.get('user_id'))
         if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        losses=get_weekly_losses_sync(uid);cb=int(losses*CASHBACK_PERCENT/100);last=get_last_cashback_sync(uid)
-        can=last<int(time.time())-7*86400 and cb>0
-        return web.json_response({'success':True,'weekly_losses':losses,'cashback_amount':cb,'percent':CASHBACK_PERCENT,'last_cashback':last,'can_claim':can})
+        result=claim_daily_bonus_sync(uid)
+        if not result: return web.json_response({'success':False,'error':'User not found'},status=404)
+        if result.get('error')=='already_claimed': return web.json_response({'success':False,'error':'already_claimed','next':result['next']})
+        return web.json_response({'success':True,'bonus':result['bonus'],'streak':result['streak'],'new_balance':result['new_balance']})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
+
+async def handle_daily_bonus_status(request):
+    try:
+        data=await request.json();uid=int(data.get('user_id'))
+        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
+        status=get_daily_bonus_status_sync(uid)
+        return web.json_response({'success':True,'status':status})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_claim_ad_reward(request):
@@ -343,7 +374,9 @@ app.router.add_post('/api/claim_ad_reward',handle_claim_ad_reward)
 app.router.add_post('/api/referral_join',handle_referral_join)
 app.router.add_post('/api/get_referral_stats',handle_get_referral_stats)
 app.router.add_post('/api/get_referral_link',handle_get_referral_link)
-app.router.add_post('/api/get_cashback_info',handle_get_cashback_info)
+app.router.add_post('/api/get_admin_referral_stats',handle_get_admin_referral_stats)
+app.router.add_post('/api/daily_bonus',handle_daily_bonus)
+app.router.add_post('/api/daily_bonus_status',handle_daily_bonus_status)
 app.router.add_get('/health',health);app.router.add_get('/',health)
 
 async def handle_webhook(request):

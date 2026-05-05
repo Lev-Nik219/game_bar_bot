@@ -8,6 +8,7 @@ def admin_main_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="📩 Сообщения поддержки", callback_data="admin_support_messages")],
+        [InlineKeyboardButton(text="👥 Рефералы", callback_data="admin_referral_stats")],
         [InlineKeyboardButton(text="💰 Запустить кэшбек", callback_data="admin_cashback")],
         [InlineKeyboardButton(text="🗑 Очистить базу", callback_data="admin_clear_db")],
     ])
@@ -29,26 +30,16 @@ def users_list_keyboard(users, page, total_pages) -> InlineKeyboardMarkup:
     keyboard = []
     for uid, username, balance, total_games in users:
         name = f"@{username}" if username else f"ID {uid}"
-        keyboard.append([InlineKeyboardButton(
-            text=f"🆔 {uid} | {name} | 💎 {balance}",
-            callback_data=f"user_info_{uid}"
-        )])
-    
+        keyboard.append([InlineKeyboardButton(text=f"🆔 {uid} | {name} | 💎 {balance}", callback_data=f"user_info_{uid}")])
     nav_row = []
-    if page > 0:
-        nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_list_prev"))
-    if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data="admin_list_next"))
-    if nav_row:
-        keyboard.append(nav_row)
+    if page > 0: nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_list_prev"))
+    if page < total_pages - 1: nav_row.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data="admin_list_next"))
+    if nav_row: keyboard.append(nav_row)
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
-    
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def clear_db_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения очистки базы"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⚠️ ДА, ОЧИСТИТЬ ВСЁ", callback_data="admin_clear_db_confirm")],
         [InlineKeyboardButton(text="❌ ОТМЕНА", callback_data="admin_back")]
     ])
-
