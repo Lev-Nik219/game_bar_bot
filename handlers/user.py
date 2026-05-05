@@ -22,7 +22,10 @@ async def cmd_start(message: types.Message):
     await get_user(user_id, username)
     
     if user_id in ADMIN_IDS:
-        await message.answer("👑 Админ-панель\n\nИспользуйте /admin")
+        await message.answer(
+            "👑 Админ-панель\n\nИспользуйте /admin",
+            reply_markup=main_user_keyboard(user_id)
+        )
     else:
         await message.answer(
             "🎮 Добро пожаловать в Game Bar Casino!\n\nНажмите на кнопку ниже, чтобы начать игру:",
