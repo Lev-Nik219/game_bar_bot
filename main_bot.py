@@ -124,6 +124,20 @@ def set_last_ad_time_sync(user_id: int, timestamp: int):
         conn.close()
     return execute_sqlite_with_retry(_do)
 
+def get_pending_payment(user_id: int):
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT payment_id, amount_points, status, invoice_id FROM crypto_payments WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+            (user_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row
+    return execute_sqlite_with_retry(_do)
+
 def create_payment(user_id: int, amount_points: int, price_usdt: float, payment_id: str, invoice_id: str):
     def _do():
         conn = sqlite3.connect(DB_NAME, timeout=10)
@@ -182,9 +196,7 @@ def init_sqlite_db():
             balance INTEGER DEFAULT 0,
             total_games INTEGER DEFAULT 0,
             wins INTEGER DEFAULT 0,
-            last_ad_watch INTEGER DEFAULT 0,
-            display_name TEXT,
-            avatar_emoji TEXT DEFAULT '🦊'
+            last_ad_watch INTEGER DEFAULT 0
         )
     ''')
     cursor.execute('''
@@ -218,11 +230,13 @@ def init_sqlite_db():
             created_at INTEGER NOT NULL
         )
     ''')
-    # Добавляем колонки, если их нет (миграция старых баз)
+    
+    # Добавляем колонки для профиля (если их ещё нет)
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
     except sqlite3.OperationalError:
         pass
+    
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN avatar_emoji TEXT DEFAULT '🦊'")
     except sqlite3.OperationalError:
@@ -280,31 +294,41 @@ async def handle_get_profile(request):
             return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
         
         uid = int(user_id)
-        conn = sqlite3.connect(DB_NAME, timeout=10)
-        conn.execute("PRAGMA busy_timeout = 5000")
-        cursor = conn.cursor()
         
-        cursor.execute("SELECT balance, total_games, wins, display_name, avatar_emoji FROM users WHERE user_id = ?", (uid,))
-        row = cursor.fetchone()
-        if not row:
+        def _do():
+            conn = sqlite3.connect(DB_NAME, timeout=10)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            cursor = conn.cursor()
+            
+            # Получаем профиль с новыми полями
+            cursor.execute("SELECT balance, total_games, wins, display_name, avatar_emoji FROM users WHERE user_id = ?", (uid,))
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return None
+            
+            balance, total_games, wins = row[0], row[1], row[2]
+            display_name = row[3] if len(row) > 3 else None
+            avatar_emoji = row[4] if len(row) > 4 else '🦊'
+            
+            cursor.execute(
+                "SELECT game_type, bet_amount, win_amount, played_at FROM game_history "
+                "WHERE user_id = ? ORDER BY played_at DESC LIMIT 10",
+                (uid,)
+            )
+            games = cursor.fetchall()
             conn.close()
+            
+            return (balance, total_games, wins, display_name, avatar_emoji, games)
+        
+        result = execute_sqlite_with_retry(_do)
+        
+        if not result:
             return web.json_response({'success': False, 'error': 'User not found'}, status=404)
         
-        balance = row[0]
-        total_games = row[1]
-        wins = row[2]
-        display_name = row[3] if len(row) > 3 else None
-        avatar_emoji = row[4] if len(row) > 4 else '🦊'
-        
+        balance, total_games, wins, display_name, avatar_emoji, games = result
         losses = total_games - wins
         winrate = round(wins / total_games * 100, 1) if total_games > 0 else 0
-        
-        cursor.execute(
-            "SELECT game_type, bet_amount, win_amount, played_at FROM game_history "
-            "WHERE user_id = ? ORDER BY played_at DESC LIMIT 10",
-            (uid,)
-        )
-        games = cursor.fetchall()
         
         recent_games = []
         for game_type, bet, win_amount, timestamp in games:
@@ -315,8 +339,6 @@ async def handle_get_profile(request):
                 'result': 'win' if win_amount > 0 else 'lose',
                 'time': timestamp
             })
-        
-        conn.close()
         
         return web.json_response({
             'success': True,
@@ -366,6 +388,7 @@ async def handle_save_profile(request):
             conn.close()
         
         execute_sqlite_with_retry(_do)
+        logger.info(f"Profile saved: user {user_id}, name='{display_name}', avatar={avatar_emoji}")
         
         return web.json_response({
             'success': True,
@@ -427,7 +450,6 @@ async def handle_claim_ad_reward(request):
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 async def handle_create_invoice(request):
-    """Создание счёта в CryptoPay"""
     try:
         data = await request.json()
         user_id = data.get('user_id')
@@ -487,7 +509,6 @@ async def handle_create_invoice(request):
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 async def handle_check_payment(request):
-    """Проверка статуса платежа"""
     try:
         data = await request.json()
         payment_id = data.get('payment_id')
@@ -496,26 +517,34 @@ async def handle_check_payment(request):
         logger.info(f"Check payment: user_id={user_id}, payment_id={payment_id}")
         
         if not payment_id and user_id:
-            conn = sqlite3.connect(DB_NAME, timeout=10)
-            conn.execute("PRAGMA busy_timeout = 5000")
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT payment_id, amount_points, status FROM crypto_payments WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
-                (int(user_id),)
-            )
-            row = cursor.fetchone()
-            conn.close()
-            
-            if not row:
+            def _find():
                 conn = sqlite3.connect(DB_NAME, timeout=10)
                 conn.execute("PRAGMA busy_timeout = 5000")
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT payment_id, amount_points FROM crypto_payments WHERE user_id = ? AND status = 'paid' ORDER BY created_at DESC LIMIT 1",
+                    "SELECT payment_id, amount_points, status FROM crypto_payments WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
                     (int(user_id),)
                 )
-                paid_row = cursor.fetchone()
+                row = cursor.fetchone()
                 conn.close()
+                return row
+            
+            row = execute_sqlite_with_retry(_find)
+            
+            if not row:
+                def _find_paid():
+                    conn = sqlite3.connect(DB_NAME, timeout=10)
+                    conn.execute("PRAGMA busy_timeout = 5000")
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT payment_id, amount_points FROM crypto_payments WHERE user_id = ? AND status = 'paid' ORDER BY created_at DESC LIMIT 1",
+                        (int(user_id),)
+                    )
+                    paid_row = cursor.fetchone()
+                    conn.close()
+                    return paid_row
+                
+                paid_row = execute_sqlite_with_retry(_find_paid)
                 if paid_row:
                     new_balance = get_balance_sync(int(user_id))
                     return web.json_response({
@@ -529,34 +558,42 @@ async def handle_check_payment(request):
                 return web.json_response({
                     'success': True,
                     'status': 'no_pending',
-                    'message': 'Нет ожидающих платежей.'
+                    'message': 'Нет ожидающих платежей. Возможно, платёж уже обработан.'
                 })
             
             payment_id = row[0]
-            logger.info(f"Found pending payment: {payment_id}")
+            logger.info(f"Found pending payment: {payment_id}, amount: {row[1]}, status: {row[2]}")
         
         if not payment_id:
             return web.json_response({'success': False, 'error': 'payment_id required'}, status=400)
         
-        # Проверка локально
-        conn = sqlite3.connect(DB_NAME, timeout=10)
-        conn.execute("PRAGMA busy_timeout = 5000")
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id, amount_points, status FROM crypto_payments WHERE payment_id = ?", (payment_id,))
-        row = cursor.fetchone()
-        conn.close()
+        # ПРОВЕРКА 1: Локально в SQLite
+        def _check_local():
+            conn = sqlite3.connect(DB_NAME, timeout=10)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, amount_points, status FROM crypto_payments WHERE payment_id = ?", (payment_id,))
+            row = cursor.fetchone()
+            conn.close()
+            return row
         
-        if row and row[2] == 'paid':
-            new_balance = get_balance_sync(row[0])
-            return web.json_response({
-                'success': True,
-                'status': 'paid',
-                'amount_points': row[1],
-                'new_balance': new_balance,
-                'message': f'✅ Начислено {row[1]} баллов!'
-            })
+        row = execute_sqlite_with_retry(_check_local)
         
-        # Проверка через CryptoPay API
+        if row:
+            local_user_id, amount, local_status = row
+            logger.info(f"Local status for {payment_id}: {local_status}")
+            
+            if local_status == 'paid':
+                new_balance = get_balance_sync(local_user_id)
+                return web.json_response({
+                    'success': True,
+                    'status': 'paid',
+                    'amount_points': amount,
+                    'new_balance': new_balance,
+                    'message': f'✅ Начислено {amount} баллов!'
+                })
+        
+        # ПРОВЕРКА 2: Через CryptoPay API
         logger.info(f"Checking CryptoPay API for {payment_id}")
         async with aiohttp.ClientSession() as session:
             headers = {
@@ -568,7 +605,7 @@ async def handle_check_payment(request):
             try:
                 async with session.get(f'{CRYPTOPAY_API_URL}/getInvoices', params=params, headers=headers, timeout=10) as resp:
                     result = await resp.json()
-                logger.info(f"CryptoPay API response: ok={result.get('ok')}")
+                logger.info(f"CryptoPay API response: ok={result.get('ok')}, items_count={len(result.get('result', {}).get('items', []))}")
             except Exception as api_err:
                 logger.error(f"CryptoPay API error: {api_err}")
                 return web.json_response({
@@ -577,22 +614,45 @@ async def handle_check_payment(request):
                     'message': '⏳ Ошибка связи с CryptoPay. Попробуйте позже.'
                 })
             
-            if not result.get('ok') or not result['result']['items']:
+            if not result.get('ok'):
+                logger.error(f"CryptoPay API not ok: {result}")
+                return web.json_response({
+                    'success': True,
+                    'status': 'api_error',
+                    'message': '⏳ Ошибка CryptoPay API. Попробуйте позже.'
+                })
+            
+            if not result['result']['items']:
+                logger.warning(f"Invoice {payment_id} not found in CryptoPay")
                 return web.json_response({
                     'success': True,
                     'status': 'not_found',
-                    'message': '❌ Счёт не найден.'
+                    'message': '❌ Счёт не найден. Возможно, он был удалён.'
                 })
             
             invoice = result['result']['items'][0]
             api_status = invoice['status']
-            logger.info(f"Invoice status: {api_status}")
+            logger.info(f"Invoice {payment_id} status from API: {api_status}")
             
             if api_status == 'paid':
                 confirmed = confirm_payment(payment_id)
                 if confirmed:
                     uid, amount = confirmed
                     new_balance = get_balance_sync(uid)
+                    logger.info(f"Payment confirmed! User {uid}, amount {amount}, new balance {new_balance}")
+                    
+                    try:
+                        await bot.send_message(
+                            uid,
+                            f"✅ <b>Платёж подтверждён!</b>\n\n"
+                            f"💰 Начислено: <b>{amount} 💎</b>\n"
+                            f"💵 Сумма: <b>{PRICE_LIST.get(amount, '?')} USDT</b>\n\n"
+                            f"Спасибо за пополнение! 🎉",
+                            parse_mode="HTML"
+                        )
+                    except Exception as notify_err:
+                        logger.error(f"Failed to notify user {uid}: {notify_err}")
+                    
                     return web.json_response({
                         'success': True,
                         'status': 'paid',
@@ -601,10 +661,17 @@ async def handle_check_payment(request):
                         'new_balance': new_balance,
                         'message': f'✅ Начислено {amount} баллов!'
                     })
+                else:
+                    return web.json_response({
+                        'success': True,
+                        'status': 'already_credited',
+                        'message': '✅ Баллы уже были начислены ранее'
+                    })
             
             status_messages = {
-                'active': '⏳ Счёт не оплачен. Проверьте оплату в CryptoBot.',
-                'expired': '❌ Срок счёта истёк.',
+                'active': '⏳ Счёт активен, но не оплачен. Проверьте оплату в CryptoBot.',
+                'expired': '❌ Срок действия счёта истёк. Создайте новый.',
+                'pending': '⏳ Платёж обрабатывается...'
             }
             message = status_messages.get(api_status, f'⏳ Статус: {api_status}. Попробуйте позже.')
             
@@ -619,7 +686,6 @@ async def handle_check_payment(request):
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 async def handle_crypto_webhook(request):
-    """Webhook для CryptoPay"""
     try:
         body = await request.text()
         signature = request.headers.get('crypto-pay-api-sign', '')
@@ -632,19 +698,22 @@ async def handle_crypto_webhook(request):
             return web.json_response({'error': 'Invalid signature'}, status=403)
         
         data = json.loads(body)
-        logger.info(f"CryptoPay webhook: {data}")
+        logger.info(f"CryptoPay webhook received: {data}")
         
         if data.get('update_type') == 'invoice_paid':
             invoice_id = str(data['payload']['invoice_id'])
             confirmed = confirm_payment(invoice_id)
             if confirmed:
                 user_id, amount = confirmed
-                logger.info(f"Webhook: Payment confirmed for user {user_id}, +{amount}")
+                logger.info(f"Webhook: Payment confirmed for user {user_id}, amount {amount}")
                 
                 try:
                     await bot.send_message(
                         user_id,
-                        f"✅ <b>Платёж подтверждён!</b>\n\n💰 Начислено: <b>{amount} 💎</b>\nСпасибо! 🎉",
+                        f"✅ <b>Платёж подтверждён!</b>\n\n"
+                        f"💰 Начислено: <b>{amount} 💎</b>\n"
+                        f"💵 Сумма: <b>{PRICE_LIST.get(amount, '?')} USDT</b>\n\n"
+                        f"Спасибо за пополнение! 🎉",
                         parse_mode="HTML"
                     )
                 except Exception as e:
@@ -658,7 +727,10 @@ async def handle_crypto_webhook(request):
 
 async def handle_get_price_list(request):
     try:
-        return web.json_response({'success': True, 'prices': {str(k): v for k, v in PRICE_LIST.items()}})
+        return web.json_response({
+            'success': True,
+            'prices': {str(k): v for k, v in PRICE_LIST.items()}
+        })
     except Exception as e:
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
