@@ -15,6 +15,14 @@ def main_user_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
+def admin_user_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    """Клавиатура для админа — только кнопка Играть"""
+    webapp_url = f"https://game-bar-web.vercel.app?user_id={user_id}"
+    keyboard = [
+        [KeyboardButton(text="🎮 Играть в Game Bar Casino", web_app=WebAppInfo(url=webapp_url))]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
 @router.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -24,7 +32,7 @@ async def cmd_start(message: types.Message):
     if user_id in ADMIN_IDS:
         await message.answer(
             "👑 Админ-панель\n\nИспользуйте /admin",
-            reply_markup=main_user_keyboard(user_id)
+            reply_markup=admin_user_keyboard(user_id)
         )
     else:
         await message.answer(
