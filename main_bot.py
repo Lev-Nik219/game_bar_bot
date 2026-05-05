@@ -39,6 +39,9 @@ PRICE_LIST = {
 CASHBACK_PERCENT = 5  # 5% от проигрышей
 CASHBACK_DAY = 6  # Воскресенье (0=ПН, 6=ВС)
 
+REFERRAL_BONUS_INVITER = 100  # Баллов пригласившему
+REFERRAL_BONUS_INVITED = 25   # Баллов приглашённому
+
 # ===== ДОСТИЖЕНИЯ =====
 ACHIEVEMENTS = {
     'first_game': {'name': '🎮 Первая игра', 'desc': 'Сыграть первую игру', 'icon': '🎮', 'target': 1},
@@ -219,6 +222,147 @@ def get_user_stats_sync(user_id: int):
         return (row[0], row[1], row[2]) if row else (0, 0, 0)
     return execute_sqlite_with_retry(_do)
 
+def process_referral_sync(inviter_id: int, invited_id: int):
+    """Обрабатывает реферальное приглашение"""
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        
+        # Проверяем, не был ли уже приглашён
+        cursor.execute("SELECT invited_by FROM users WHERE user_id = ?", (invited_id,))
+        row = cursor.fetchone()
+        if row and row[0] is not None:
+            conn.close()
+            return None  # Уже приглашён кем-то
+        
+        # Обновляем приглашённого
+        cursor.execute("UPDATE users SET invited_by = ? WHERE user_id = ?", (inviter_id, invited_id))
+        
+        # Начисляем бонус приглашённому
+        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (invited_id,))
+        inv_bal = cursor.fetchone()[0]
+        cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (inv_bal + REFERRAL_BONUS_INVITED, invited_id))
+        
+        conn.commit()
+        conn.close()
+        return inviter_id
+    return execute_sqlite_with_retry(_do)
+
+def claim_referral_reward_sync(invited_id: int):
+    """Начисляет бонус пригласившему после первой игры приглашённого"""
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT invited_by, referral_claimed FROM users WHERE user_id = ?", (invited_id,))
+        row = cursor.fetchone()
+        if not row or not row[0]:
+            conn.close()
+            return None
+        
+        inviter_id = row[0]
+        already_claimed = row[1] if len(row) > 1 else 0
+        
+        if already_claimed:
+            conn.close()
+            return None
+        
+        # Начисляем пригласившему
+        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (inviter_id,))
+        inv_bal = cursor.fetchone()[0]
+        cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (inv_bal + REFERRAL_BONUS_INVITER, inviter_id))
+        
+        # Помечаем, что бонус начислен
+        cursor.execute("UPDATE users SET referral_claimed = 1 WHERE user_id = ?", (invited_id,))
+        
+        # Увеличиваем счётчик рефералов
+        cursor.execute("UPDATE users SET referral_count = COALESCE(referral_count, 0) + 1 WHERE user_id = ?", (inviter_id,))
+        
+        conn.commit()
+        conn.close()
+        return (inviter_id, inv_bal + REFERRAL_BONUS_INVITER)
+    return execute_sqlite_with_retry(_do)
+
+def get_referral_stats_sync(user_id: int):
+    """Статистика рефералов"""
+    def _do():
+        conn = sqlite3.connect(DB_NAME, timeout=10)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM users WHERE invited_by = ?", (user_id,))
+        total = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM users WHERE invited_by = ? AND total_games > 0", (user_id,))
+        played = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT user_id, username, total_games FROM users WHERE invited_by = ? ORDER BY total_games DESC LIMIT 10", (user_id,))
+        friends = [{'user_id': r[0], 'username': r[1] or f'ID{r[0]}', 'games': r[2]} for r in cursor.fetchall()]
+        
+        conn.close()
+        return {'total': total, 'played': played, 'friends': friends}
+    return execute_sqlite_with_retry(_do)
+
+async def handle_referral_join(request):
+    """Присоединение по реферальной ссылке"""
+    try:
+        data = await request.json()
+        invited_id = data.get('user_id')
+        inviter_id = data.get('inviter_id')
+        
+        if not invited_id or not inviter_id:
+            return web.json_response({'success': False, 'error': 'user_id and inviter_id required'}, status=400)
+        
+        if int(invited_id) == int(inviter_id):
+            return web.json_response({'success': False, 'error': 'Cannot refer yourself'}, status=400)
+        
+        result = process_referral_sync(int(inviter_id), int(invited_id))
+        
+        if result is None:
+            return web.json_response({'success': False, 'error': 'Already referred or invalid'}, status=200)
+        
+        return web.json_response({
+            'success': True,
+            'message': f'Вы присоединились по реферальной ссылке! +{REFERRAL_BONUS_INVITED} баллов',
+            'bonus': REFERRAL_BONUS_INVITED
+        })
+    except Exception as e:
+        logger.error(f"referral_join error: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+async def handle_get_referral_stats(request):
+    """Получение статистики рефералов"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        if not user_id:
+            return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
+        
+        stats = get_referral_stats_sync(int(user_id))
+        balance = get_balance_sync(int(user_id))
+        stats['balance'] = balance
+        
+        return web.json_response({'success': True, 'stats': stats})
+    except Exception as e:
+        logger.error(f"referral_stats error: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+async def handle_get_referral_link(request):
+    """Получение реферальной ссылки"""
+    try:
+        data = await request.json()
+        user_id = data.get('user_id')
+        if not user_id:
+            return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
+        
+        link = f"https://t.me/GamesAsino_bot/GamesAsino?startapp=ref_{user_id}"
+        
+        return web.json_response({'success': True, 'link': link, 'user_id': user_id})
+    except Exception as e:
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
 def save_game_history_sync(user_id: int, bet: int, win_amount: int, game_type: str):
     def _do():
         conn = sqlite3.connect(DB_NAME, timeout=10)
@@ -348,6 +492,18 @@ def init_sqlite_db():
             UNIQUE(user_id, achievement_id)
         )
     ''')
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN invited_by INTEGER DEFAULT NULL")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN referral_claimed INTEGER DEFAULT 0")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN referral_count INTEGER DEFAULT 0")
+    except:
+        pass
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
     except sqlite3.OperationalError:
@@ -528,16 +684,27 @@ async def handle_game_result(request):
             return web.json_response({'success': False, 'error': 'Missing fields'}, status=400)
         uid = int(user_id)
         current_balance = get_balance_sync(uid)
+        
+        # Проверяем, первая ли это игра (для рефералки)
+        bal_before, tg_before, w_before = get_user_stats_sync(uid)
+        is_first_game = tg_before == 0
+        
         new_balance = current_balance + win_amount if win else current_balance - bet
         update_balance_sync(uid, new_balance)
         update_stats_sync(uid, win)
         save_game_history_sync(uid, bet, win_amount if win else 0, game)
         
-        # Проверяем достижения
+        # Реферальный бонус после первой игры
+        if is_first_game:
+            claim_result = claim_referral_reward_sync(uid)
+            if claim_result:
+                try:
+                    await bot.send_message(claim_result[0], f"🎉 Ваш друг сыграл первую игру!\n💰 Вы получили +{REFERRAL_BONUS_INVITER} 💎!")
+                except:
+                    pass
+        
         bal, tgames, w = get_user_stats_sync(uid)
         new_achs = check_achievements_sync(uid, new_balance, tgames, w, win_amount if win else 0)
-        if new_achs:
-            logger.info(f"New achievements for {uid}: {new_achs}")
         
         return web.json_response({'success': True, 'new_balance': new_balance, 'win': win, 'new_achievements': new_achs if new_achs else []})
     except Exception as e:
@@ -885,6 +1052,9 @@ app.router.add_post('/api/check_payment', handle_check_payment)
 app.router.add_post('/api/crypto_webhook', handle_crypto_webhook)
 app.router.add_post('/api/manual_cashback', handle_manual_cashback)
 app.router.add_post('/api/get_cashback_info', handle_get_cashback_info)
+app.router.add_post('/api/referral_join', handle_referral_join)
+app.router.add_post('/api/get_referral_stats', handle_get_referral_stats)
+app.router.add_post('/api/get_referral_link', handle_get_referral_link)
 app.router.add_get('/api/get_price_list', handle_get_price_list)
 app.router.add_get('/health', health)
 app.router.add_get('/', health)
