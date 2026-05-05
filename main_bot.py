@@ -389,13 +389,29 @@ async def handle_create_invoice(request):
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 async def handle_check_payment(request):
-    """Проверка статуса платежа"""
+    """Проверка статуса платежа (для ручной проверки пользователем)"""
     try:
         data = await request.json()
         payment_id = data.get('payment_id')
         
         if not payment_id:
-            return web.json_response({'success': False, 'error': 'payment_id required'}, status=400)
+            # Если нет payment_id, ищем последний pending платёж пользователя
+            user_id = data.get('user_id')
+            if not user_id:
+                return web.json_response({'success': False, 'error': 'user_id or payment_id required'}, status=400)
+            
+            conn = sqlite3.connect(DB_NAME)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT payment_id FROM crypto_payments WHERE user_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+                (int(user_id),)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            
+            if not row:
+                return web.json_response({'success': True, 'status': 'no_pending', 'message': 'Нет ожидающих платежей'})
+            payment_id = row[0]
         
         # Проверяем статус через CryptoPay API
         import aiohttp
@@ -419,22 +435,31 @@ async def handle_check_payment(request):
                 confirmed = confirm_payment(payment_id)
                 if confirmed:
                     user_id, amount = confirmed
+                    new_balance = get_balance_sync(user_id)
                     return web.json_response({
                         'success': True,
                         'status': 'paid',
                         'user_id': user_id,
-                        'amount_points': amount
+                        'amount_points': amount,
+                        'new_balance': new_balance,
+                        'message': f'✅ Начислено {amount} баллов!'
+                    })
+                else:
+                    return web.json_response({
+                        'success': True,
+                        'status': 'already_credited',
+                        'message': '✅ Баллы уже были начислены ранее'
                     })
             
             return web.json_response({
                 'success': True,
-                'status': status
+                'status': status,
+                'message': f'⏳ Статус платежа: {status}. Попробуйте позже.'
             })
             
     except Exception as e:
         logger.error(f"Check payment error: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
-
 async def handle_crypto_webhook(request):
     """Webhook для CryptoPay (автоматическое подтверждение)"""
     try:
