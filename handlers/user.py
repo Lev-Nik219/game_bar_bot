@@ -7,6 +7,9 @@ from database import get_user
 
 router = Router()
 
+REFERRAL_BONUS_INVITED = 25
+REFERRAL_BONUS_INVITER = 100
+
 def main_user_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     webapp_url = f"https://game-bar-web.vercel.app?user_id={user_id}"
     keyboard = [
@@ -29,6 +32,52 @@ async def cmd_start(message: types.Message):
     username = message.from_user.username
     await get_user(user_id, username)
     
+    # Проверяем реферальный код в deep link
+    args = message.text.split()
+    if len(args) > 1 and args[1].startswith('ref_'):
+        try:
+            inviter_id = int(args[1].replace('ref_', ''))
+            if inviter_id != user_id:
+                import sqlite3
+                import time
+                DB_NAME = "casino.db"
+                conn = sqlite3.connect(DB_NAME, timeout=10)
+                conn.execute("PRAGMA busy_timeout = 5000")
+                cursor = conn.cursor()
+                
+                # Проверяем, не приглашён ли уже
+                cursor.execute("SELECT invited_by FROM users WHERE user_id = ?", (user_id,))
+                row = cursor.fetchone()
+                
+                if not row or row[0] is None:
+                    # Начисляем бонус приглашённому
+                    cursor.execute("UPDATE users SET invited_by = ? WHERE user_id = ?", (inviter_id, user_id))
+                    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+                    bal = cursor.fetchone()[0]
+                    cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (bal + REFERRAL_BONUS_INVITED, user_id))
+                    conn.commit()
+                    
+                    await message.answer(
+                        f"🎉 Вы перешли по реферальной ссылке!\n\n"
+                        f"💰 На ваш счёт зачислено +{REFERRAL_BONUS_INVITED} 💎\n\n"
+                        f"Теперь сыграйте в любую игру, и ваш друг получит +{REFERRAL_BONUS_INVITER} 💎!"
+                    )
+                    
+                    # Уведомляем пригласившего
+                    from main_bot import bot
+                    try:
+                        await bot.send_message(
+                            inviter_id,
+                            f"👤 По вашей ссылке присоединился новый игрок!\n\n"
+                            f"🎁 Вы получите +{REFERRAL_BONUS_INVITER} 💎 после его первой игры!"
+                        )
+                    except:
+                        pass
+                
+                conn.close()
+        except Exception as e:
+            print(f"Referral error: {e}")
+    
     if user_id in ADMIN_IDS:
         await message.answer(
             "👑 Админ-панель\n\nИспользуйте /admin",
@@ -44,24 +93,16 @@ async def cmd_start(message: types.Message):
 async def cmd_myid(message: types.Message):
     await message.answer(f"Ваш Telegram ID: {message.from_user.id}")
 
-# ===== ВАЖНО: обработчик для любых текстовых сообщений НЕ ДОЛЖЕН ПЕРЕХВАТЫВАТЬ КОМАНДЫ =====
 @router.message(F.text)
 async def handle_regular_text(message: types.Message):
     user_id = message.from_user.id
     text = message.text
     
-    # КЛЮЧЕВОЕ: пропускаем ВСЕ команды
     if text.startswith('/'):
         return
     
-    # Пропускаем админов
     if user_id in ADMIN_IDS:
         return
-    
-    # Если дошли сюда — это обычный пользователь с обычным текстом
-    # Но мы не должны обрабатывать текстовые сообщения обычных пользователей,
-    # потому что у них нет других кнопок, кроме "Играть" и "Поддержка"
-    # Всё, что они пишут — это сообщение в поддержку
     
     from handlers.support import save_support_message, notify_admins
     save_support_message(user_id, text)
