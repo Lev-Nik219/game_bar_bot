@@ -316,17 +316,13 @@ async def handle_game_result(request):
     try:
         data=await request.json();uid=int(data.get('user_id'));game=data.get('game');bet=data.get('bet');win=data.get('win');wa=data.get('win_amount',0)
         if not uid or not game or bet is None: return web.json_response({'success':False,'error':'Missing fields'},status=400)
-        bal_before,tg_before,w_before=get_user_stats_sync(uid);is_first=tg_before==0
         cur=get_balance_sync(uid);new=cur+wa if win else cur-bet
         update_balance_sync(uid,new);update_stats_sync(uid,win);save_game_history_sync(uid,bet,wa if win else 0,game)
-        if is_first:
-            claim=claim_referral_reward_sync(uid)
-            if claim:
-                try: await bot.send_message(claim[0],f"🎉 Ваш друг сыграл первую игру!\n💰 Вы получили +{REFERRAL_BONUS_INVITER} 💎!")
-                except: pass
         bal,tg,w=get_user_stats_sync(uid);new_achs=check_achievements_sync(uid,new,tg,w,wa if win else 0)
-        return web.json_response({'success':True,'new_balance':new,'win':win,'new_achievements':new_achs if new_achs else[]})
-    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
+        return web.json_response({'success':True,'new_balance':new,'win':win})
+    except Exception as e:
+        logger.error(f"game_result error: {e}")
+        return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_referral_join(request):
     try:
