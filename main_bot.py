@@ -489,6 +489,10 @@ async def handle_get_price_list(request):
 
 async def health(request): return web.json_response({'status':'ok'})
 
+async def handle_webhook(request):
+    update=types.Update(**await request.json());await dp.feed_update(bot,update);return web.Response()
+
+app.router.add_post('/webhook',handle_webhook)
 app.router.add_post('/api/get_balance',handle_get_balance)
 app.router.add_post('/api/get_profile',handle_get_profile)
 app.router.add_post('/api/get_achievements',handle_get_achievements)
@@ -507,11 +511,6 @@ app.router.add_post('/api/check_payment',handle_check_payment)
 app.router.add_post('/api/crypto_webhook',handle_crypto_webhook)
 app.router.add_get('/api/get_price_list',handle_get_price_list)
 app.router.add_get('/health',health);app.router.add_get('/',health)
-
-async def handle_webhook(request):
-    update=types.Update(**await request.json());await dp.feed_update(bot,update);return web.Response()
-
-app.router.add_post('/webhook',handle_webhook)
 
 async def on_startup():
     await init_db_pool();await create_db();init_sqlite_db()
