@@ -247,7 +247,16 @@ async def handle_get_balance(request):
                 conn.commit()
                 import asyncio as asyncio_mod
                 async def sync_pg():
-                    try: await execute_query("INSERT INTO users(user_id,balance,total_games,wins) VALUES($1,$2,$3,$4) ON CONFLICT(user_id) DO UPDATE SET balance=$2",uid,20,0,0)
+                    try:
+                        # Получаем username из запроса если есть
+                        req_data = await request.json()
+                        uname = req_data.get('username', None)
+                        if not uname:
+                            uname = f"user_{uid}"
+                        await execute_query(
+                            "INSERT INTO users(user_id,username,balance,total_games,wins) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id) DO UPDATE SET balance=$3, username=COALESCE(users.username,$2)",
+                            uid, uname, 20, 0, 0
+                        )
                     except: pass
                 asyncio_mod.ensure_future(sync_pg())
                 conn.close();return 20
@@ -354,6 +363,8 @@ async def handle_claim_ad_reward(request):
             return web.json_response({'success':False,'error':'cooldown','remaining':remaining},status=200)
         cur=get_balance_sync(uid);new=cur+AD_REWARD_AMOUNT
         update_balance_sync(uid,new);set_last_ad_time_sync(uid,now)
+        try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2", new, uid)
+        except: pass
         return web.json_response({'success':True,'new_balance':new,'reward':AD_REWARD_AMOUNT})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
@@ -367,6 +378,8 @@ async def handle_claim_free_bonus(request):
             return web.json_response({'success':False,'error':'cooldown','remaining':remaining},status=200)
         cur=get_balance_sync(uid);new=cur+FREE_BONUS_AMOUNT
         update_balance_sync(uid,new);set_last_ad_time_sync(uid,now)
+        try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2", new, uid)
+        except: pass
         return web.json_response({'success':True,'new_balance':new,'reward':FREE_BONUS_AMOUNT})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
@@ -495,6 +508,9 @@ async def handle_shop_buy(request):
         bal=get_balance_sync(uid)
         if bal<item["price"]: return web.json_response({'success':False,'error':f'Недостаточно баллов! Нужно {item["price"]} 💎'})
         new_bal=bal-item["price"];update_balance_sync(uid,new_bal)
+        # Синхронизация с PostgreSQL
+        try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2", new_bal, uid)
+        except Exception as e: logger.error(f"PG sync shop error: {e}")
         def _add():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor();now=int(time.time())
             if item["type"] in ["avatar","service"]:c.execute("INSERT INTO user_inventory(user_id,item_id,purchased_at) VALUES(?,?,?)",(uid,item_id,now))
