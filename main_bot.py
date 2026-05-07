@@ -690,6 +690,12 @@ app.router.add_post('/api/create_invoice',handle_create_invoice)
 app.router.add_post('/api/check_payment',handle_check_payment)
 app.router.add_get('/api/get_price_list',handle_get_price_list)
 app.router.add_get('/health',health);app.router.add_get('/',health)
+# Маршруты магазина
+app.router.add_post('/api/shop/items', handle_shop_items)
+app.router.add_post('/api/shop/buy', handle_shop_buy)
+app.router.add_post('/api/shop/inventory', handle_shop_inventory)
+app.router.add_post('/api/shop/activate_skin', handle_activate_skin)
+app.router.add_post('/api/shop/use_insurance', handle_use_insurance)
 
 async def on_startup():
     await init_db_pool();await create_db();init_sqlite_db()
