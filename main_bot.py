@@ -38,33 +38,35 @@ DAILY_BONUS_STREAK_MULTIPLIER = 1
 CASHBACK_PERCENT = 5
 CASHBACK_DAY = 6
 
-
 # ========== МАГАЗИН: ТОВАРЫ ==========
 SHOP_ITEMS = [
-    # Скины слотов
-    {"id": "slot_neon", "category": "skins", "game": "slots", "name": "🌃 Неоновые слоты", "desc": "Неоновые символы", "price": 300, "type": "skin"},
-    {"id": "slot_gold", "category": "skins", "game": "slots", "name": "👑 Золотые слоты", "desc": "Премиум золото", "price": 400, "type": "skin"},
-    {"id": "slot_retro", "category": "skins", "game": "slots", "name": "📺 Ретро слоты", "desc": "Классика 80-х", "price": 250, "type": "skin"},
+    # Обычные аватарки (50 баллов)
+    {"id": "avatar_dog", "category": "avatars", "name": "🐶 Весёлый пёс", "desc": "Обычная аватарка", "price": 50, "type": "avatar", "emoji": "🐶"},
+    {"id": "avatar_cat", "category": "avatars", "name": "🐱 Хитрый кот", "desc": "Обычная аватарка", "price": 50, "type": "avatar", "emoji": "🐱"},
+    {"id": "avatar_frog", "category": "avatars", "name": "🐸 Лягушонок", "desc": "Обычная аватарка", "price": 50, "type": "avatar", "emoji": "🐸"},
+    {"id": "avatar_monkey", "category": "avatars", "name": "🐵 Обезьянка", "desc": "Обычная аватарка", "price": 50, "type": "avatar", "emoji": "🐵"},
+    {"id": "avatar_cow", "category": "avatars", "name": "🐮 Коровка", "desc": "Обычная аватарка", "price": 50, "type": "avatar", "emoji": "🐮"},
+    {"id": "avatar_pig", "category": "avatars", "name": "🐷 Поросёнок", "desc": "Обычная аватарка", "price": 50, "type": "avatar", "emoji": "🐷"},
+    {"id": "avatar_hamster", "category": "avatars", "name": "🐹 Хомяк", "desc": "Обычная аватарка", "price": 50, "type": "avatar", "emoji": "🐹"},
+    {"id": "avatar_mouse", "category": "avatars", "name": "🐭 Мышонок", "desc": "Обычная аватарка", "price": 50, "type": "avatar", "emoji": "🐭"},
+    {"id": "avatar_penguin", "category": "avatars", "name": "🐧 Пингвин", "desc": "Обычная аватарка", "price": 50, "type": "avatar", "emoji": "🐧"},
+    {"id": "avatar_owl", "category": "avatars", "name": "🦉 Мудрая сова", "desc": "Обычная аватарка", "price": 50, "type": "avatar", "emoji": "🦉"},
     
-    # Скины рулетки
-    {"id": "roulette_velvet", "category": "skins", "game": "roulette", "name": "🟥 Красный бархат", "desc": "Стиль казино", "price": 350, "type": "skin"},
-    {"id": "roulette_midnight", "category": "skins", "game": "roulette", "name": "🌙 Полночь", "desc": "Тёмная тема", "price": 300, "type": "skin"},
+    # Редкие аватарки (100 баллов)
+    {"id": "avatar_fire_fox", "category": "avatars", "name": "🔥 Огненный лис", "desc": "Редкая аватарка", "price": 100, "type": "avatar", "emoji": "🔥🦊"},
+    {"id": "avatar_ice_wolf", "category": "avatars", "name": "❄️ Ледяной волк", "desc": "Редкая аватарка", "price": 100, "type": "avatar", "emoji": "❄️🐺"},
+    {"id": "avatar_butterfly", "category": "avatars", "name": "🦋 Радужная бабочка", "desc": "Редкая аватарка", "price": 100, "type": "avatar", "emoji": "🦋"},
     
-    # Скины костей
-    {"id": "dice_fire", "category": "skins", "game": "dice", "name": "🔥 Огненные кости", "desc": "Горячие броски", "price": 200, "type": "skin"},
-    {"id": "dice_ice", "category": "skins", "game": "dice", "name": "❄️ Ледяные кости", "desc": "Холодный расчёт", "price": 200, "type": "skin"},
-    
-    # Редкие аватарки (добавляются к стандартным при покупке)
-    {"id": "avatar_fire_fox", "category": "avatars", "name": "🔥 Огненный лис", "desc": "Редкая аватарка", "price": 500, "type": "avatar", "emoji": "🔥🦊"},
-    {"id": "avatar_ice_wolf", "category": "avatars", "name": "❄️ Ледяной волк", "desc": "Редкая аватарка", "price": 500, "type": "avatar", "emoji": "❄️🐺"},
-    {"id": "avatar_rainbow_unicorn", "category": "avatars", "name": "🌈 Радужный единорог", "desc": "Легендарная аватарка", "price": 800, "type": "avatar", "emoji": "🌈🦄"},
+    # Легендарные аватарки (200 баллов)
+    {"id": "avatar_rainbow_unicorn", "category": "avatars", "name": "🌈 Радужный единорог", "desc": "Легендарная аватарка", "price": 200, "type": "avatar", "emoji": "🌈🦄"},
+    {"id": "avatar_octopus", "category": "avatars", "name": "🐙 Космический осьминог", "desc": "Легендарная аватарка", "price": 200, "type": "avatar", "emoji": "🐙👾"},
     
     # Услуги
-    {"id": "nickname_change", "category": "services", "name": "✏️ Смена никнейма", "desc": "Одноразовая смена", "price": 50, "type": "service"},
+    {"id": "nickname_change", "category": "services", "name": "✏️ Смена никнейма", "desc": "Одноразовая смена (до 30 символов)", "price": 20, "type": "service"},
     
-    # Бонусы (временные усиления)
-    {"id": "lucky_charm", "category": "boosts", "name": "🍀 Талисман удачи", "desc": "+5% к шансу выигрыша (1 час)", "price": 150, "type": "boost", "effect": "luck_5", "duration": 3600},
-    {"id": "bet_insurance", "category": "boosts", "name": "💰 Страховка ставки", "desc": "50% возврат при проигрыше (1 раз)", "price": 250, "type": "boost", "effect": "insurance", "uses": 1},
+    # Бонусы
+    {"id": "lucky_charm", "category": "boosts", "name": "🍀 Талисман удачи", "desc": "+5% к шансу выигрыша на 1 час", "price": 150, "type": "boost", "effect": "luck_5", "duration": 3600},
+    {"id": "bet_insurance", "category": "boosts", "name": "💰 Страховка ставки", "desc": "50% возврат при проигрыше (1 раз)", "price": 100, "type": "boost", "effect": "insurance", "uses": 1},
 ]
 
 ACHIEVEMENTS = {
@@ -217,24 +219,11 @@ def init_sqlite_db():
     c.execute('''CREATE TABLE IF NOT EXISTS support_messages(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,message TEXT NOT NULL,created_at INTEGER NOT NULL,is_read INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS crypto_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,amount_points INTEGER NOT NULL,price_usdt REAL NOT NULL,payment_id TEXT UNIQUE NOT NULL,invoice_id TEXT,status TEXT DEFAULT 'pending',created_at INTEGER NOT NULL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS achievements(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,achievement_id TEXT NOT NULL,achieved_at INTEGER NOT NULL,UNIQUE(user_id,achievement_id))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS user_inventory(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,item_id TEXT NOT NULL,purchased_at INTEGER NOT NULL,used INTEGER DEFAULT 0)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS active_boosts(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,boost_type TEXT NOT NULL,expires_at INTEGER NOT NULL,uses_left INTEGER DEFAULT 1)''')
     for col,typ in [('display_name','TEXT'),('avatar_emoji',"TEXT DEFAULT '🦊'"),('last_cashback','INTEGER DEFAULT 0'),('daily_bonus_last','INTEGER DEFAULT 0'),('daily_bonus_streak','INTEGER DEFAULT 0'),('exp','INTEGER DEFAULT 0')]:
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
         except: pass
-            # Таблицы для магазина
-    c.execute('''CREATE TABLE IF NOT EXISTS user_inventory (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        item_id TEXT NOT NULL,
-        purchased_at INTEGER NOT NULL,
-        used INTEGER DEFAULT 0
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS active_boosts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        boost_type TEXT NOT NULL,
-        expires_at INTEGER NOT NULL,
-        uses_left INTEGER DEFAULT 1
-    )''')
     conn.commit();conn.close()
 
 bot=Bot(token=MAIN_BOT_TOKEN);storage=MemoryStorage();dp=Dispatcher(storage=storage)
@@ -258,14 +247,10 @@ async def handle_get_balance(request):
             if not r:
                 c.execute("INSERT INTO users(user_id,balance,total_games,wins,avatar_emoji) VALUES(?,20,0,0,'🦊')",(uid,))
                 conn.commit()
-                # Синхронизируем с PostgreSQL
                 import asyncio
                 async def sync_pg():
                     try:
-                        await execute_query(
-                            "INSERT INTO users(user_id,balance,total_games,wins) VALUES($1,$2,$3,$4) ON CONFLICT(user_id) DO UPDATE SET balance=$2",
-                            uid,20,0,0
-                        )
+                        await execute_query("INSERT INTO users(user_id,balance,total_games,wins) VALUES($1,$2,$3,$4) ON CONFLICT(user_id) DO UPDATE SET balance=$2",uid,20,0,0)
                     except: pass
                 asyncio.ensure_future(sync_pg())
                 conn.close()
@@ -289,20 +274,13 @@ async def handle_get_profile(request):
         result=execute_sqlite_with_retry(_do)
         if not result: return web.json_response({'success':False,'error':'User not found'},status=404)
         bal,tg,w,exp_val,dn,av,games=result;losses=tg-w;wr=round(w/tg*100,1) if tg>0 else 0
-        # Расчет уровня
         level=int((exp_val/100)**0.5)+1 if exp_val>0 else 1
         next_level_exp=(level+1)**2*100
         exp_for_current=level**2*100
         exp_progress=exp_val-exp_for_current
         exp_needed=next_level_exp-exp_for_current
-        
         rg=[{'game':g[0],'bet':g[1],'win_amount':g[2],'result':'win' if g[2]>0 else 'lose','time':g[3]} for g in games]
-        return web.json_response({'success':True,'profile':{
-            'user_id':uid,'balance':bal,'total_games':tg,'wins':w,'losses':losses,'winrate':wr,
-            'recent_games':rg,'display_name':dn,'avatar_emoji':av or '🦊',
-            'exp':exp_val,'level':level,'next_level_exp':next_level_exp,
-            'exp_progress':exp_progress,'exp_needed':exp_needed
-        }})
+        return web.json_response({'success':True,'profile':{'user_id':uid,'balance':bal,'total_games':tg,'wins':w,'losses':losses,'winrate':wr,'recent_games':rg,'display_name':dn,'avatar_emoji':av or '🦊','exp':exp_val,'level':level,'next_level_exp':next_level_exp,'exp_progress':exp_progress,'exp_needed':exp_needed}})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_get_achievements(request):
@@ -326,7 +304,7 @@ async def handle_save_profile(request):
         data=await request.json();uid=int(data.get('user_id'));dn=data.get('display_name','').strip();av=data.get('avatar_emoji','🦊')
         if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
         if dn and len(dn)>30: return web.json_response({'success':False,'error':'Никнейм слишком длинный'},status=400)
-        allowed=['🦊','🐺','🦁','🐯','🐻','🐼','🐨','🐰','🦄','🐲','🎃','🤖','👑','💀','👻']
+        allowed=['🦊','🐺','🦁','🐯','🐻','🐼','🐨','🐰','🦄','🐲','🎃','🤖','👑','💀','👻','🐶','🐱','🐸','🐵','🐮','🐷','🐹','🐭','🐧','🦉','🦋','🐙','🐳','🦚','🔥🦊','❄️🐺','🦋','🌈🦄','🐙👾']
         if av not in allowed: av='🦊'
         def _do(): conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor();c.execute("UPDATE users SET display_name=?,avatar_emoji=? WHERE user_id=?",(dn or None,av,uid));conn.commit();conn.close()
         execute_sqlite_with_retry(_do);return web.json_response({'success':True,'message':'Профиль сохранён!','display_name':dn,'avatar_emoji':av})
@@ -338,7 +316,6 @@ async def handle_game_result(request):
         if not uid or not game or bet is None: return web.json_response({'success':False,'error':'Missing fields'},status=400)
         cur=get_balance_sync(uid);new=cur+wa if win else cur-bet
         update_balance_sync(uid,new);update_stats_sync(uid,win);save_game_history_sync(uid,bet,wa if win else 0,game)
-        # Начисляем опыт: +50 за игру, +100 за победу
         def _add_exp():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
             try: c.execute("ALTER TABLE users ADD COLUMN exp INTEGER DEFAULT 0")
@@ -410,9 +387,7 @@ async def handle_check_payment(request):
                     conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
                     c.execute("SELECT payment_id,amount_points FROM crypto_payments WHERE user_id=? AND status='paid' ORDER BY created_at DESC LIMIT 1",(int(uid),));paid_row=c.fetchone();conn.close();return paid_row
                 paid_row=execute_sqlite_with_retry(_find_paid)
-                if paid_row:
-                    new_balance=get_balance_sync(int(uid))
-                    return web.json_response({'success':True,'status':'already_credited','message':f'✅ Баллы уже начислены! ({paid_row[1]} 💎)','new_balance':new_balance,'amount_points':paid_row[1]})
+                if paid_row: return web.json_response({'success':True,'status':'already_credited','message':f'✅ Баллы уже начислены! ({paid_row[1]} 💎)','new_balance':get_balance_sync(int(uid)),'amount_points':paid_row[1]})
                 return web.json_response({'success':True,'status':'no_pending','message':'Нет ожидающих платежей.'})
             payment_id=row[0]
         if not payment_id: return web.json_response({'success':False,'error':'payment_id required'},status=400)
@@ -420,22 +395,20 @@ async def handle_check_payment(request):
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
             c.execute("SELECT user_id,amount_points,status FROM crypto_payments WHERE payment_id=?",(payment_id,));r=c.fetchone();conn.close();return r
         row=execute_sqlite_with_retry(_check_local)
-        if row and row[2]=='paid':
-            new_balance=get_balance_sync(row[0])
-            return web.json_response({'success':True,'status':'paid','amount_points':row[1],'new_balance':new_balance,'message':f'✅ Начислено {row[1]} баллов!'})
+        if row and row[2]=='paid': return web.json_response({'success':True,'status':'paid','amount_points':row[1],'new_balance':get_balance_sync(row[0]),'message':f'✅ Начислено {row[1]} баллов!'})
         async with aiohttp.ClientSession() as session:
             headers={'Crypto-Pay-API-Token':CRYPTOPAY_TOKEN,'Content-Type':'application/json'}
             params={'invoice_ids':payment_id}
             try:
-                async with session.get(f'{CRYPTOPAY_API_URL}/getInvoices',params=params,headers=headers,timeout=10) as resp: result=await resp.json()
-            except Exception: return web.json_response({'success':True,'status':'api_error','message':'⏳ Ошибка связи с CryptoPay.'})
+                async with session.get(f'{CRYPTOPAY_API_URL}/getInvoices',params=params,headers=headers,timeout=10) as resp:
+                    result = await resp.json()
+            except Exception:
+                return web.json_response({'success':True,'status':'api_error','message':'⏳ Ошибка связи с CryptoPay.'})
             if not result.get('ok') or not result['result']['items']: return web.json_response({'success':True,'status':'not_found','message':'❌ Счёт не найден.'})
             invoice=result['result']['items'][0]
             if invoice['status']=='paid':
                 confirmed=confirm_payment(payment_id)
-                if confirmed:
-                    uid,amount=confirmed;new_balance=get_balance_sync(uid)
-                    return web.json_response({'success':True,'status':'paid','user_id':uid,'amount_points':amount,'new_balance':new_balance,'message':f'✅ Начислено {amount} баллов!'})
+                if confirmed: return web.json_response({'success':True,'status':'paid','user_id':confirmed[0],'amount_points':confirmed[1],'new_balance':get_balance_sync(confirmed[0]),'message':f'✅ Начислено {confirmed[1]} баллов!'})
                 return web.json_response({'success':True,'status':'already_credited','message':'✅ Баллы уже начислены.'})
             return web.json_response({'success':True,'status':invoice['status'],'message':f'⏳ Статус: {invoice["status"]}.'})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
@@ -464,212 +437,75 @@ async def handle_get_price_list(request):
 # ========== API МАГАЗИНА ==========
 
 def get_user_inventory_sync(uid):
-    """Получить инвентарь пользователя (синхронно)"""
     def _do():
-        conn = sqlite3.connect(DB_NAME, timeout=10)
-        conn.execute("PRAGMA busy_timeout = 5000")
-        c = conn.cursor()
-        c.execute("SELECT item_id, purchased_at FROM user_inventory WHERE user_id = ?", (uid,))
-        items = [{"item_id": r[0], "purchased_at": r[1]} for r in c.fetchall()]
-        # Активные бусты
-        now = int(time.time())
-        c.execute("SELECT boost_type, expires_at, uses_left FROM active_boosts WHERE user_id = ? AND expires_at > ?", (uid, now))
-        boosts = [{"boost_type": r[0], "expires_at": r[1], "uses_left": r[2]} for r in c.fetchall()]
-        conn.close()
-        return {"items": items, "boosts": boosts}
+        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+        c.execute("SELECT item_id,purchased_at FROM user_inventory WHERE user_id=?",(uid,))
+        items=[{"item_id":r[0],"purchased_at":r[1]} for r in c.fetchall()]
+        now=int(time.time())
+        c.execute("SELECT boost_type,expires_at,uses_left FROM active_boosts WHERE user_id=? AND expires_at>?",(uid,now))
+        boosts=[{"boost_type":r[0],"expires_at":r[1],"uses_left":r[2]} for r in c.fetchall()]
+        conn.close();return {"items":items,"boosts":boosts}
     return execute_sqlite_with_retry(_do)
 
 async def handle_shop_items(request):
-    """API: Получить список товаров магазина"""
     try:
-        data = await request.json()
-        uid = int(data.get('user_id'))
-        category = data.get('category', 'all')
-        if not uid:
-            return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
-        
-        # Получаем инвентарь пользователя
-        inventory = get_user_inventory_sync(uid)
-        owned_items = {inv["item_id"] for inv in inventory["items"]}
-        active_boosts = inventory["boosts"]
-        
-        # Копируем товары и отмечаем купленные
-        items = []
+        data=await request.json();uid=int(data.get('user_id'));category=data.get('category','all')
+        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
+        inventory=get_user_inventory_sync(uid);owned_items={inv["item_id"] for inv in inventory["items"]};active_boosts=inventory["boosts"]
+        items=[]
         for item in SHOP_ITEMS:
-            item_copy = item.copy()
-            item_copy["owned"] = item["id"] in owned_items
-            # Проверяем активные бусты
-            if item["type"] == "boost":
-                item_copy["active"] = False
+            item_copy=item.copy();item_copy["owned"]=item["id"] in owned_items
+            if item["type"]=="boost":
+                item_copy["active"]=False
                 for b in active_boosts:
-                    if b["boost_type"] == item.get("effect"):
-                        item_copy["active"] = True
-                        item_copy["expires_at"] = b["expires_at"]
-                        item_copy["uses_left"] = b["uses_left"]
-                        break
+                    if b["boost_type"]==item.get("effect"):item_copy["active"]=True;item_copy["expires_at"]=b["expires_at"];item_copy["uses_left"]=b["uses_left"];break
             items.append(item_copy)
-        
-        # Фильтруем по категории
-        if category != 'all':
-            items = [i for i in items if i["category"] == category]
-        
-        return web.json_response({
-            'success': True, 
-            'items': items, 
-            'categories': [
-                {'id': 'all', 'name': 'Все', 'icon': '🛍️'},
-                {'id': 'skins', 'name': 'Скины', 'icon': '🎨'},
-                {'id': 'avatars', 'name': 'Аватарки', 'icon': '🦊'},
-                {'id': 'boosts', 'name': 'Бонусы', 'icon': '⚡'},
-                {'id': 'services', 'name': 'Услуги', 'icon': '🔧'}
-            ]
-        })
-    except Exception as e:
-        return web.json_response({'success': False, 'error': str(e)}, status=500)
+        if category!='all':items=[i for i in items if i["category"]==category]
+        return web.json_response({'success':True,'items':items,'categories':[{'id':'all','name':'Все','icon':'🛍️'},{'id':'avatars','name':'Аватарки','icon':'🦊'},{'id':'boosts','name':'Бонусы','icon':'⚡'},{'id':'services','name':'Услуги','icon':'🔧'}]})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_shop_buy(request):
-    """API: Купить товар"""
     try:
-        data = await request.json()
-        uid = int(data.get('user_id'))
-        item_id = data.get('item_id')
-        if not uid or not item_id:
-            return web.json_response({'success': False, 'error': 'user_id and item_id required'}, status=400)
-        
-        # Ищем товар
-        item = next((i for i in SHOP_ITEMS if i["id"] == item_id), None)
-        if not item:
-            return web.json_response({'success': False, 'error': 'Товар не найден'}, status=404)
-        
-        # Проверяем, есть ли уже в инвентаре (только для скинов и аватарок)
-        if item["type"] in ["skin", "avatar"]:
-            inventory = get_user_inventory_sync(uid)
-            if item_id in {inv["item_id"] for inv in inventory["items"]}:
-                return web.json_response({'success': False, 'error': 'Уже куплено!'})
-        
-        # Проверяем баланс
-        bal = get_balance_sync(uid)
-        if bal < item["price"]:
-            return web.json_response({'success': False, 'error': f'Недостаточно баллов! Нужно {item["price"]} 💎'})
-        
-        # Списываем баллы
-        new_bal = bal - item["price"]
-        update_balance_sync(uid, new_bal)
-        
-        # Добавляем в инвентарь
-        def _add_to_inventory():
-            conn = sqlite3.connect(DB_NAME, timeout=10)
-            conn.execute("PRAGMA busy_timeout = 5000")
-            c = conn.cursor()
-            now = int(time.time())
-            
-            # Если это скин или аватарка — просто добавляем в инвентарь
-            if item["type"] in ["skin", "avatar"]:
-                c.execute("INSERT INTO user_inventory (user_id, item_id, purchased_at) VALUES (?, ?, ?)", 
-                         (uid, item_id, now))
-            
-            # Если это услуга (смена никнейма) — даём право на использование
-            elif item["type"] == "service":
-                c.execute("INSERT INTO user_inventory (user_id, item_id, purchased_at) VALUES (?, ?, ?)", 
-                         (uid, item_id, now))
-            
-            # Если это буст — добавляем в активные бусты
-            elif item["type"] == "boost":
-                expires = now + item.get("duration", 3600)
-                uses = item.get("uses", 1)
-                c.execute("INSERT INTO active_boosts (user_id, boost_type, expires_at, uses_left) VALUES (?, ?, ?, ?)", 
-                         (uid, item.get("effect"), expires, uses))
-            
-            conn.commit()
-            conn.close()
-        
-        execute_sqlite_with_retry(_add_to_inventory)
-        
-        return web.json_response({
-            'success': True,
-            'new_balance': new_bal,
-            'message': f'✅ Куплено: {item["name"]}!',
-            'item': item
-        })
-    except Exception as e:
-        return web.json_response({'success': False, 'error': str(e)}, status=500)
+        data=await request.json();uid=int(data.get('user_id'));item_id=data.get('item_id')
+        if not uid or not item_id: return web.json_response({'success':False,'error':'user_id and item_id required'},status=400)
+        item=next((i for i in SHOP_ITEMS if i["id"]==item_id),None)
+        if not item: return web.json_response({'success':False,'error':'Товар не найден'},status=404)
+        if item["type"]=="avatar":
+            inventory=get_user_inventory_sync(uid)
+            if item_id in {inv["item_id"] for inv in inventory["items"]}: return web.json_response({'success':False,'error':'Уже куплено!'})
+        bal=get_balance_sync(uid)
+        if bal<item["price"]: return web.json_response({'success':False,'error':f'Недостаточно баллов! Нужно {item["price"]} 💎'})
+        new_bal=bal-item["price"];update_balance_sync(uid,new_bal)
+        def _add():
+            conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor();now=int(time.time())
+            if item["type"] in ["avatar","service"]:c.execute("INSERT INTO user_inventory(user_id,item_id,purchased_at) VALUES(?,?,?)",(uid,item_id,now))
+            elif item["type"]=="boost":c.execute("INSERT INTO active_boosts(user_id,boost_type,expires_at,uses_left) VALUES(?,?,?,?)",(uid,item.get("effect"),now+item.get("duration",3600),item.get("uses",1)))
+            conn.commit();conn.close()
+        execute_sqlite_with_retry(_add)
+        return web.json_response({'success':True,'new_balance':new_bal,'message':f'✅ Куплено: {item["name"]}!','item':item})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_shop_inventory(request):
-    """API: Получить инвентарь пользователя"""
     try:
-        data = await request.json()
-        uid = int(data.get('user_id'))
-        if not uid:
-            return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
-        
-        inventory = get_user_inventory_sync(uid)
-        return web.json_response({'success': True, 'inventory': inventory})
-    except Exception as e:
-        return web.json_response({'success': False, 'error': str(e)}, status=500)
-
-async def handle_activate_skin(request):
-    """API: Активировать скин"""
-    try:
-        data = await request.json()
-        uid = int(data.get('user_id'))
-        item_id = data.get('item_id')
-        if not uid or not item_id:
-            return web.json_response({'success': False, 'error': 'user_id and item_id required'}, status=400)
-        
-        # Проверяем владение
-        inventory = get_user_inventory_sync(uid)
-        if item_id not in {inv["item_id"] for inv in inventory["items"]}:
-            return web.json_response({'success': False, 'error': 'Сначала купите этот предмет!'})
-        
-        # Активируем скин
-        def _activate():
-            conn = sqlite3.connect(DB_NAME, timeout=10)
-            conn.execute("PRAGMA busy_timeout = 5000")
-            c = conn.cursor()
-            # Сбрасываем все активные скины
-            c.execute("UPDATE user_inventory SET used = 0 WHERE user_id = ?", (uid,))
-            # Активируем выбранный
-            c.execute("UPDATE user_inventory SET used = 1 WHERE user_id = ? AND item_id = ?", (uid, item_id))
-            conn.commit()
-            conn.close()
-        execute_sqlite_with_retry(_activate)
-        
-        return web.json_response({'success': True, 'message': 'Скин активирован!'})
-    except Exception as e:
-        return web.json_response({'success': False, 'error': str(e)}, status=500)
+        data=await request.json();uid=int(data.get('user_id'))
+        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
+        return web.json_response({'success':True,'inventory':get_user_inventory_sync(uid)})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_use_insurance(request):
-    """API: Использовать страховку (возврат 50% при проигрыше)"""
     try:
-        data = await request.json()
-        uid = int(data.get('user_id'))
-        if not uid:
-            return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
-        
-        now = int(time.time())
+        data=await request.json();uid=int(data.get('user_id'))
+        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
+        now=int(time.time())
         def _use():
-            conn = sqlite3.connect(DB_NAME, timeout=10)
-            conn.execute("PRAGMA busy_timeout = 5000")
-            c = conn.cursor()
-            c.execute("SELECT id, uses_left FROM active_boosts WHERE user_id = ? AND boost_type = 'insurance' AND expires_at > ? AND uses_left > 0 LIMIT 1", 
-                     (uid, now))
-            row = c.fetchone()
-            if not row:
-                conn.close()
-                return None
-            boost_id, uses_left = row
-            c.execute("UPDATE active_boosts SET uses_left = uses_left - 1 WHERE id = ?", (boost_id,))
-            conn.commit()
-            conn.close()
-            return True
-        
-        result = execute_sqlite_with_retry(_use)
-        if result:
-            return web.json_response({'success': True, 'message': '🛡️ Страховка применена! Вы получите 50% возврат при следующем проигрыше.'})
-        else:
-            return web.json_response({'success': False, 'error': 'Нет активной страховки'})
-    except Exception as e:
-        return web.json_response({'success': False, 'error': str(e)}, status=500)
+            conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+            c.execute("SELECT id,uses_left FROM active_boosts WHERE user_id=? AND boost_type='insurance' AND expires_at>? AND uses_left>0 LIMIT 1",(uid,now));row=c.fetchone()
+            if not row:conn.close();return None
+            c.execute("UPDATE active_boosts SET uses_left=uses_left-1 WHERE id=?",(row[0],));conn.commit();conn.close();return True
+        result=execute_sqlite_with_retry(_use)
+        if result: return web.json_response({'success':True,'message':'🛡️ Страховка применена!'})
+        return web.json_response({'success':False,'error':'Нет активной страховки'})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def health(request): return web.json_response({'status':'ok'})
 
@@ -690,12 +526,10 @@ app.router.add_post('/api/create_invoice',handle_create_invoice)
 app.router.add_post('/api/check_payment',handle_check_payment)
 app.router.add_get('/api/get_price_list',handle_get_price_list)
 app.router.add_get('/health',health);app.router.add_get('/',health)
-# Маршруты магазина
-app.router.add_post('/api/shop/items', handle_shop_items)
-app.router.add_post('/api/shop/buy', handle_shop_buy)
-app.router.add_post('/api/shop/inventory', handle_shop_inventory)
-app.router.add_post('/api/shop/activate_skin', handle_activate_skin)
-app.router.add_post('/api/shop/use_insurance', handle_use_insurance)
+app.router.add_post('/api/shop/items',handle_shop_items)
+app.router.add_post('/api/shop/buy',handle_shop_buy)
+app.router.add_post('/api/shop/inventory',handle_shop_inventory)
+app.router.add_post('/api/shop/use_insurance',handle_use_insurance)
 
 async def on_startup():
     await init_db_pool();await create_db();init_sqlite_db()
