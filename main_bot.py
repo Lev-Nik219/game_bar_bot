@@ -448,21 +448,68 @@ def get_user_inventory_sync(uid):
     return execute_sqlite_with_retry(_do)
 
 async def handle_shop_items(request):
+    """API: Получить список товаров магазина"""
     try:
-        data=await request.json();uid=int(data.get('user_id'));category=data.get('category','all')
-        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        inventory=get_user_inventory_sync(uid);owned_items={inv["item_id"] for inv in inventory["items"]};active_boosts=inventory["boosts"]
-        items=[]
+        data = await request.json()
+        uid = int(data.get('user_id'))
+        category = data.get('category', 'all')
+        if not uid:
+            return web.json_response({'success': False, 'error': 'user_id required'}, status=400)
+        
+        # Получаем инвентарь пользователя
+        inventory = get_user_inventory_sync(uid)
+        owned_items = {inv["item_id"] for inv in inventory["items"]}
+        active_boosts = inventory["boosts"]
+        
+        # Узнаём текущую аватарку пользователя
+        def _get_active():
+            conn = sqlite3.connect(DB_NAME, timeout=10)
+            conn.execute("PRAGMA busy_timeout = 5000")
+            c = conn.cursor()
+            c.execute("SELECT avatar_emoji FROM users WHERE user_id = ?", (uid,))
+            row = c.fetchone()
+            conn.close()
+            return row[0] if row else '🦊'
+        current_avatar = execute_sqlite_with_retry(_get_active)
+        
+        # Копируем товары и отмечаем купленные
+        items = []
         for item in SHOP_ITEMS:
-            item_copy=item.copy();item_copy["owned"]=item["id"] in owned_items
-            if item["type"]=="boost":
-                item_copy["active"]=False
+            item_copy = item.copy()
+            item_copy["owned"] = item["id"] in owned_items
+            
+            # Для аватарок проверяем, активна ли она
+            if item["type"] == "avatar":
+                item_copy["active"] = item.get("emoji") == current_avatar
+            
+            # Проверяем активные бусты
+            if item["type"] == "boost":
+                item_copy["active"] = False
                 for b in active_boosts:
-                    if b["boost_type"]==item.get("effect"):item_copy["active"]=True;item_copy["expires_at"]=b["expires_at"];item_copy["uses_left"]=b["uses_left"];break
+                    if b["boost_type"] == item.get("effect"):
+                        item_copy["active"] = True
+                        item_copy["expires_at"] = b["expires_at"]
+                        item_copy["uses_left"] = b["uses_left"]
+                        break
+            
             items.append(item_copy)
-        if category!='all':items=[i for i in items if i["category"]==category]
-        return web.json_response({'success':True,'items':items,'categories':[{'id':'all','name':'Все','icon':'🛍️'},{'id':'avatars','name':'Аватарки','icon':'🦊'},{'id':'boosts','name':'Бонусы','icon':'⚡'},{'id':'services','name':'Услуги','icon':'🔧'}]})
-    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
+        
+        # Фильтруем по категории
+        if category != 'all':
+            items = [i for i in items if i["category"] == category]
+        
+        return web.json_response({
+            'success': True, 
+            'items': items, 
+            'categories': [
+                {'id': 'all', 'name': 'Все', 'icon': '🛍️'},
+                {'id': 'avatars', 'name': 'Аватарки', 'icon': '🦊'},
+                {'id': 'boosts', 'name': 'Бонусы', 'icon': '⚡'},
+                {'id': 'services', 'name': 'Услуги', 'icon': '🔧'}
+            ]
+        })
+    except Exception as e:
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 async def handle_shop_buy(request):
     try:
