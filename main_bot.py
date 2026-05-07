@@ -15,7 +15,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, BotCommandScopeDefault
 
 from config import MAIN_BOT_TOKEN, ADMIN_IDS
-from database import init_db_pool, close_db_pool, create_db
+from database import init_db_pool, close_db_pool, create_db, execute_query
 from handlers import user_router, admin_router, support_router
 
 logging.basicConfig(level=logging.INFO)
@@ -211,8 +211,23 @@ async def handle_get_balance(request):
         def _do():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
             c.execute("SELECT balance FROM users WHERE user_id=?",(uid,));r=c.fetchone()
-            if not r: c.execute("INSERT INTO users(user_id,balance,total_games,wins,avatar_emoji) VALUES(?,20,0,0,'🦊')",(uid,));conn.commit();conn.close();return 20
-            conn.close();return r[0]
+            if not r:
+                c.execute("INSERT INTO users(user_id,balance,total_games,wins,avatar_emoji) VALUES(?,20,0,0,'🦊')",(uid,))
+                conn.commit()
+                # Синхронизируем с PostgreSQL
+                import asyncio
+                async def sync_pg():
+                    try:
+                        await execute_query(
+                            "INSERT INTO users(user_id,balance,total_games,wins) VALUES($1,$2,$3,$4) ON CONFLICT(user_id) DO UPDATE SET balance=$2",
+                            uid,20,0,0
+                        )
+                    except: pass
+                asyncio.ensure_future(sync_pg())
+                conn.close()
+                return 20
+            conn.close()
+            return r[0]
         bal=execute_sqlite_with_retry(_do);return web.json_response({'success':True,'balance':bal})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
