@@ -346,9 +346,14 @@ async def handle_get_referral_link(request):
     try:
         data=await request.json();uid=data.get('user_id')
         if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        # Исправляем: правильная ссылка через бота
+        # Добавляем user_id в URL чтобы Mini App знал кто открыл
         link=f"https://t.me/GamesAsino_bot/GamesAsino?startapp=ref_{uid}"
-        return web.json_response({'success':True,'link':link,'user_id':uid})
+        return web.json_response({
+            'success':True,
+            'link':link,
+            'webapp_link':f"https://game-bar-web.vercel.app?user_id={uid}&startapp=ref_{uid}",
+            'user_id':uid
+        })
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_get_admin_referral_stats(request):
