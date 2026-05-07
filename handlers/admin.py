@@ -253,17 +253,43 @@ async def admin_clear_db_confirm_callback(callback: types.CallbackQuery):
     except: pass
     try:
         import shutil
+        
+        # Бэкап
         backup_name = f"casino_backup_{int(time.time())}.db"
         shutil.copy2("casino.db", backup_name)
+        
+        # Очищаем SQLite (Mini App)
         conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 10000"); c = conn.cursor()
-        c.execute("DELETE FROM users"); c.execute("DELETE FROM game_history"); c.execute("DELETE FROM crypto_payments"); c.execute("DELETE FROM support_messages"); c.execute("DELETE FROM achievements"); c.execute("DELETE FROM sqlite_sequence")
+        c.execute("DELETE FROM users"); c.execute("DELETE FROM game_history")
+        c.execute("DELETE FROM crypto_payments"); c.execute("DELETE FROM support_messages")
+        c.execute("DELETE FROM achievements"); c.execute("DELETE FROM sqlite_sequence")
         conn.commit(); conn.close()
-        await callback.message.edit_text(f"✅ <b>База данных полностью очищена!</b>\n\n📁 Бэкап сохранён: <code>{backup_name}</code>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]]))
+        
+        # Очищаем PostgreSQL (бот)
+        from database import execute_query
+        await execute_query("DELETE FROM users")
+        await execute_query("DELETE FROM game_history")
+        await execute_query("DELETE FROM crypto_transactions")
+        await execute_query("DELETE FROM deposits")
+        await execute_query("DELETE FROM agreements")
+        await execute_query("DELETE FROM achievements")
+        
+        await callback.message.edit_text(
+            f"✅ <b>База данных полностью очищена!</b>\n\n"
+            f"📁 Бэкап сохранён: <code>{backup_name}</code>\n"
+            f"🔄 SQLite и PostgreSQL очищены",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]])
+        )
         logger.info(f"БАЗА ДАННЫХ ОЧИЩЕНА! Бэкап: {backup_name}")
     except Exception as e:
         logger.error(f"Clear DB error: {e}")
-        await callback.message.edit_text(f"❌ <b>Ошибка при очистке:</b>\n\n<code>{str(e)}</code>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]]))
-
+        await callback.message.edit_text(
+            f"❌ <b>Ошибка при очистке:</b>\n\n<code>{str(e)}</code>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]])
+        )
+        
 # ---------- ОТМЕНА И НАЗАД ----------
 @router.callback_query(F.data == "admin_cancel")
 async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
