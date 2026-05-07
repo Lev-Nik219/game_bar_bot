@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+import sqlite3
 from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -56,6 +57,18 @@ async def admin_give_amount(message: types.Message, state: FSMContext):
     data = await state.get_data(); target_id = data.get("target_id")
     target_balance, *_ = await get_user(target_id, None); new_balance = target_balance + amount
     await update_balance(target_id, new_balance)
+    
+    # Синхронизация с SQLite для Mini App
+    try:
+        conn = sqlite3.connect("casino.db")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, target_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"SQLite sync error: {e}")
+    
     await message.answer(f"✅ Пользователю {target_id} начислено {amount} 💎.\nНовый баланс: {new_balance} 💎.")
     await state.clear(); await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
 
@@ -83,6 +96,18 @@ async def admin_take_amount(message: types.Message, state: FSMContext):
     if target_balance < amount: await message.answer(f"❌ Недостаточно баллов. У пользователя {target_balance} 💎."); return
     new_balance = target_balance - amount
     await update_balance(target_id, new_balance)
+    
+    # Синхронизация с SQLite для Mini App
+    try:
+        conn = sqlite3.connect("casino.db")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, target_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"SQLite sync error: {e}")
+    
     await message.answer(f"✅ У пользователя {target_id} списано {amount} 💎.\nНовый баланс: {new_balance} 💎.")
     await state.clear(); await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
 
