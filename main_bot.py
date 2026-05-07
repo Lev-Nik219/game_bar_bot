@@ -136,6 +136,7 @@ def process_referral_sync(inviter_id, invited_id):
     return execute_sqlite_with_retry(_do)
 
 def claim_referral_reward_sync(invited_id):
+    """Начисляет бонус пригласившему после первой игры приглашённого"""
     def _do():
         conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
         c.execute("SELECT invited_by,referral_claimed FROM users WHERE user_id=?",(invited_id,));r=c.fetchone()
@@ -316,8 +317,18 @@ async def handle_game_result(request):
     try:
         data=await request.json();uid=int(data.get('user_id'));game=data.get('game');bet=data.get('bet');win=data.get('win');wa=data.get('win_amount',0)
         if not uid or not game or bet is None: return web.json_response({'success':False,'error':'Missing fields'},status=400)
+        # Получаем количество игр ДО обновления
+        tg_before = get_user_stats_sync(uid)[1]
         cur=get_balance_sync(uid);new=cur+wa if win else cur-bet
         update_balance_sync(uid,new);update_stats_sync(uid,win);save_game_history_sync(uid,bet,wa if win else 0,game)
+        # Проверяем реферальный бонус после первой игры
+        if tg_before == 0:
+            claim_result = claim_referral_reward_sync(uid)
+            if claim_result:
+                try:
+                    await bot.send_message(claim_result[0], f"🎉 Ваш друг сыграл первую игру!\n💰 Вы получили +{REFERRAL_BONUS_INVITER} 💎!")
+                except:
+                    pass
         bal,tg,w=get_user_stats_sync(uid);new_achs=check_achievements_sync(uid,new,tg,w,wa if win else 0)
         return web.json_response({'success':True,'new_balance':new,'win':win})
     except Exception as e:
@@ -346,14 +357,8 @@ async def handle_get_referral_link(request):
     try:
         data=await request.json();uid=data.get('user_id')
         if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        # Добавляем user_id в URL чтобы Mini App знал кто открыл
-        link=f"https://t.me/GamesAsino_bot/GamesAsino?startapp=ref_{uid}"
-        return web.json_response({
-            'success':True,
-            'link':link,
-            'webapp_link':f"https://game-bar-web.vercel.app?user_id={uid}&startapp=ref_{uid}",
-            'user_id':uid
-        })
+        link=f"https://t.me/GamesAsino_bot?start=ref_{uid}"
+        return web.json_response({'success':True,'link':link,'user_id':uid})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_get_admin_referral_stats(request):
