@@ -269,9 +269,19 @@ async def handle_get_profile(request):
         result=execute_sqlite_with_retry(_do)
         if not result: return web.json_response({'success':False,'error':'User not found'},status=404)
         bal,tg,wins_val,exp_val,dn,av,games=result;losses=tg-wins_val;wr=round(wins_val/tg*100,1) if tg>0 else 0
-        level=int((exp_val/100)**0.5)+1 if exp_val>0 else 1
-        next_level_exp=(level+1)**2*100
-        exp_for_current=level**2*100
+        # Hamster Combat формула: уровень N требует N²×500 XP
+        total_xp = exp_val
+        level = 1
+        xp_needed_for_level = 1**2 * 500  # 500 XP для уровня 2
+        while total_xp >= xp_needed_for_level and level < 10:
+            total_xp -= xp_needed_for_level
+            level += 1
+            xp_needed_for_level = level**2 * 500
+        
+        exp_for_current = (level)**2 * 500
+        next_level_exp = (level+1)**2 * 500
+        exp_progress = total_xp  # сколько набрано в текущем уровне
+        exp_needed = xp_needed_for_level  # сколько нужно для следующего
         exp_progress=exp_val-exp_for_current
         exp_needed=next_level_exp-exp_for_current
         rg=[{'game':g[0],'bet':g[1],'win_amount':g[2],'result':'win' if g[2]>0 else 'lose','time':g[3]} for g in games]
