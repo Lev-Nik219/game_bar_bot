@@ -333,10 +333,10 @@ async def handle_game_result(request):
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
             try: c.execute("ALTER TABLE users ADD COLUMN exp INTEGER DEFAULT 0")
             except: pass
-            exp_gain=25+(50 if win else 0)
+            exp_gain=50 if win else 25
             c.execute("UPDATE users SET exp=COALESCE(exp,0)+? WHERE user_id=?",(exp_gain,uid));conn.commit();conn.close()
         execute_sqlite_with_retry(_add_exp)
-        try: await execute_query("UPDATE users SET exp=COALESCE(exp,0)+$1,total_games=total_games+1,wins=wins+$2 WHERE user_id=$3",50+(100 if win else 0),1 if win else 0,uid)
+        try: await execute_query("UPDATE users SET exp=COALESCE(exp,0)+$1,total_games=total_games+1,wins=wins+$2 WHERE user_id=$3",50 if win else 25,1 if win else 0,uid)
         except: pass
         bal,tg,w=get_user_stats_sync(uid);new_achs=check_achievements_sync(uid,new,tg,w,wa if win else 0)
         return web.json_response({'success':True,'new_balance':new,'win':win})
