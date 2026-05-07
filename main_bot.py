@@ -188,8 +188,8 @@ def init_sqlite_db():
     c.execute('''CREATE TABLE IF NOT EXISTS support_messages(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,message TEXT NOT NULL,created_at INTEGER NOT NULL,is_read INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS crypto_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,amount_points INTEGER NOT NULL,price_usdt REAL NOT NULL,payment_id TEXT UNIQUE NOT NULL,invoice_id TEXT,status TEXT DEFAULT 'pending',created_at INTEGER NOT NULL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS achievements(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,achievement_id TEXT NOT NULL,achieved_at INTEGER NOT NULL,UNIQUE(user_id,achievement_id))''')
-    for col,typ in [('display_name','TEXT'),('avatar_emoji',"TEXT DEFAULT '🦊'"),('last_cashback','INTEGER DEFAULT 0'),('daily_bonus_last','INTEGER DEFAULT 0'),('daily_bonus_streak','INTEGER DEFAULT 0')]:
-        try: c.execute("ALTER TABLE users ADD COLUMN exp INTEGER DEFAULT 0")
+    for col,typ in [('display_name','TEXT'),('avatar_emoji',"TEXT DEFAULT '🦊'"),('last_cashback','INTEGER DEFAULT 0'),('daily_bonus_last','INTEGER DEFAULT 0'),('daily_bonus_streak','INTEGER DEFAULT 0'),('exp','INTEGER DEFAULT 0')]:
+        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
         except: pass
     conn.commit();conn.close()
 
