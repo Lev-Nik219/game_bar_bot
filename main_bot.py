@@ -189,7 +189,7 @@ def init_sqlite_db():
     c.execute('''CREATE TABLE IF NOT EXISTS crypto_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,amount_points INTEGER NOT NULL,price_usdt REAL NOT NULL,payment_id TEXT UNIQUE NOT NULL,invoice_id TEXT,status TEXT DEFAULT 'pending',created_at INTEGER NOT NULL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS achievements(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,achievement_id TEXT NOT NULL,achieved_at INTEGER NOT NULL,UNIQUE(user_id,achievement_id))''')
     for col,typ in [('display_name','TEXT'),('avatar_emoji',"TEXT DEFAULT '🦊'"),('last_cashback','INTEGER DEFAULT 0'),('daily_bonus_last','INTEGER DEFAULT 0'),('daily_bonus_streak','INTEGER DEFAULT 0')]:
-        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+        try: c.execute("ALTER TABLE users ADD COLUMN exp INTEGER DEFAULT 0")
         except: pass
     conn.commit();conn.close()
 
@@ -237,16 +237,28 @@ async def handle_get_profile(request):
         if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
         def _do():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
-            c.execute("SELECT balance,total_games,wins,display_name,avatar_emoji FROM users WHERE user_id=?",(uid,));r=c.fetchone()
+            c.execute("SELECT balance,total_games,wins,COALESCE(exp,0),display_name,avatar_emoji FROM users WHERE user_id=?",(uid,));r=c.fetchone()
             if not r: conn.close();return None
-            bal,tg,w,dn,av=r[0],r[1],r[2],r[3] if len(r)>3 else None,r[4] if len(r)>4 else '🦊'
-            c.execute("SELECT game_type,bet_amount,win_amount,played_at FROM game_history WHERE user_id=? ORDER BY played_at DESC LIMIT 10",(uid,));games=c.fetchall();conn.close()
-            return (bal,tg,w,dn,av,games)
+            bal,tg,w,exp_val,dn,av=r[0],r[1],r[2],r[3],r[4] if len(r)>4 else None,r[5] if len(r)>5 else '🦊'
+            c.execute("SELECT game_type,bet_amount,win_amount,played_at FROM game_history WHERE user_id=? ORDER BY played_at DESC LIMIT 25",(uid,));games=c.fetchall();conn.close()
+            return (bal,tg,w,exp_val,dn,av,games)
         result=execute_sqlite_with_retry(_do)
         if not result: return web.json_response({'success':False,'error':'User not found'},status=404)
-        bal,tg,w,dn,av,games=result;losses=tg-w;wr=round(w/tg*100,1) if tg>0 else 0
+        bal,tg,w,exp_val,dn,av,games=result;losses=tg-w;wr=round(w/tg*100,1) if tg>0 else 0
+        # Расчет уровня
+        level=int((exp_val/100)**0.5)+1 if exp_val>0 else 1
+        next_level_exp=(level+1)**2*100
+        exp_for_current=level**2*100
+        exp_progress=exp_val-exp_for_current
+        exp_needed=next_level_exp-exp_for_current
+        
         rg=[{'game':g[0],'bet':g[1],'win_amount':g[2],'result':'win' if g[2]>0 else 'lose','time':g[3]} for g in games]
-        return web.json_response({'success':True,'profile':{'user_id':uid,'balance':bal,'total_games':tg,'wins':w,'losses':losses,'winrate':wr,'recent_games':rg,'display_name':dn,'avatar_emoji':av or '🦊'}})
+        return web.json_response({'success':True,'profile':{
+            'user_id':uid,'balance':bal,'total_games':tg,'wins':w,'losses':losses,'winrate':wr,
+            'recent_games':rg,'display_name':dn,'avatar_emoji':av or '🦊',
+            'exp':exp_val,'level':level,'next_level_exp':next_level_exp,
+            'exp_progress':exp_progress,'exp_needed':exp_needed
+        }})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_get_achievements(request):
@@ -282,6 +294,14 @@ async def handle_game_result(request):
         if not uid or not game or bet is None: return web.json_response({'success':False,'error':'Missing fields'},status=400)
         cur=get_balance_sync(uid);new=cur+wa if win else cur-bet
         update_balance_sync(uid,new);update_stats_sync(uid,win);save_game_history_sync(uid,bet,wa if win else 0,game)
+        # Начисляем опыт: +50 за игру, +100 за победу
+        def _add_exp():
+            conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
+            try: c.execute("ALTER TABLE users ADD COLUMN exp INTEGER DEFAULT 0")
+            except: pass
+            exp_gain=50+(100 if win else 0)
+            c.execute("UPDATE users SET exp=COALESCE(exp,0)+? WHERE user_id=?",(exp_gain,uid));conn.commit();conn.close()
+        execute_sqlite_with_retry(_add_exp)
         bal,tg,w=get_user_stats_sync(uid);new_achs=check_achievements_sync(uid,new,tg,w,wa if win else 0)
         return web.json_response({'success':True,'new_balance':new,'win':win})
     except Exception as e:
