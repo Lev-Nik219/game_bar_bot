@@ -269,23 +269,28 @@ async def handle_get_profile(request):
         result=execute_sqlite_with_retry(_do)
         if not result: return web.json_response({'success':False,'error':'User not found'},status=404)
         bal,tg,wins_val,exp_val,dn,av,games=result;losses=tg-wins_val;wr=round(wins_val/tg*100,1) if tg>0 else 0
-        # Hamster Combat формула: уровень N требует N²×500 XP
-        total_xp = exp_val
-        level = 1
-        xp_needed_for_level = 1**2 * 500  # 500 XP для уровня 2
-        while total_xp >= xp_needed_for_level and level < 10:
-            total_xp -= xp_needed_for_level
-            level += 1
-            xp_needed_for_level = level**2 * 500
         
-        exp_for_current = (level)**2 * 500
-        next_level_exp = (level+1)**2 * 500
-        exp_progress = total_xp  # сколько набрано в текущем уровне
-        exp_needed = xp_needed_for_level  # сколько нужно для следующего
-        exp_progress=exp_val-exp_for_current
-        exp_needed=next_level_exp-exp_for_current
+        # Формула Hamster Combat: N² × 500
+        if exp_val and exp_val > 0:
+            level = 1
+            remaining = exp_val
+            while remaining >= level * level * 500 and level < 10:
+                remaining -= level * level * 500
+                level += 1
+            exp_progress = remaining
+            exp_needed = level * level * 500
+        else:
+            level = 1
+            exp_progress = 0
+            exp_needed = 1 * 1 * 500
+        
         rg=[{'game':g[0],'bet':g[1],'win_amount':g[2],'result':'win' if g[2]>0 else 'lose','time':g[3]} for g in games]
-        return web.json_response({'success':True,'profile':{'user_id':uid,'balance':bal,'total_games':tg,'wins':wins_val,'losses':losses,'winrate':wr,'recent_games':rg,'display_name':dn,'avatar_emoji':av or '🦊','exp':exp_val,'level':level,'next_level_exp':next_level_exp,'exp_progress':exp_progress,'exp_needed':exp_needed}})
+        return web.json_response({'success':True,'profile':{
+            'user_id':uid,'balance':bal,'total_games':tg,'wins':wins_val,'losses':losses,'winrate':wr,
+            'recent_games':rg,'display_name':dn,'avatar_emoji':av or '🦊',
+            'exp':exp_val,'level':level,'next_level_exp':(level+1)**2*500,
+            'exp_progress':exp_progress,'exp_needed':exp_needed
+        }})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_get_achievements(request):
