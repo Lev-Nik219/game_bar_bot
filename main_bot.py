@@ -32,9 +32,6 @@ CRYPTOPAY_API_URL = 'https://pay.crypt.bot/api'
 
 PRICE_LIST = {250:20,500:35,750:50,1000:65}
 
-REFERRAL_BONUS_INVITER = 100
-REFERRAL_BONUS_INVITED = 25
-
 DAILY_BONUS_BASE = 10
 DAILY_BONUS_STREAK_MULTIPLIER = 1
 
@@ -124,55 +121,6 @@ def get_achievements_sync(uid):
         c.execute("SELECT achievement_id,achieved_at FROM achievements WHERE user_id=? ORDER BY achieved_at DESC",(uid,));earned={r[0]:r[1] for r in c.fetchall()};conn.close();return earned
     return execute_sqlite_with_retry(_do)
 
-def process_referral_sync(inviter_id, invited_id):
-    def _do():
-        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
-        c.execute("SELECT invited_by FROM users WHERE user_id=?",(invited_id,));r=c.fetchone()
-        if r and r[0] is not None: conn.close();return None
-        c.execute("UPDATE users SET invited_by=? WHERE user_id=?",(inviter_id,invited_id))
-        c.execute("SELECT balance FROM users WHERE user_id=?",(invited_id,));inv_bal=c.fetchone()[0]
-        c.execute("UPDATE users SET balance=? WHERE user_id=?",(inv_bal+REFERRAL_BONUS_INVITED,invited_id))
-        conn.commit();conn.close();return inviter_id
-    return execute_sqlite_with_retry(_do)
-
-def claim_referral_reward_sync(invited_id):
-    """Начисляет бонус пригласившему после первой игры приглашённого"""
-    def _do():
-        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
-        c.execute("SELECT invited_by,referral_claimed FROM users WHERE user_id=?",(invited_id,));r=c.fetchone()
-        if not r or not r[0]: conn.close();return None
-        inviter_id=r[0];already=r[1] if len(r)>1 else 0
-        if already: conn.close();return None
-        c.execute("SELECT balance FROM users WHERE user_id=?",(inviter_id,));inv_bal=c.fetchone()[0]
-        c.execute("UPDATE users SET balance=? WHERE user_id=?",(inv_bal+REFERRAL_BONUS_INVITER,inviter_id))
-        c.execute("UPDATE users SET referral_claimed=1 WHERE user_id=?",(invited_id,))
-        c.execute("UPDATE users SET referral_count=COALESCE(referral_count,0)+1 WHERE user_id=?",(inviter_id,))
-        conn.commit();conn.close();return (inviter_id,inv_bal+REFERRAL_BONUS_INVITER)
-    return execute_sqlite_with_retry(_do)
-
-def get_referral_stats_sync(uid):
-    def _do():
-        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
-        c.execute("SELECT COUNT(*) FROM users WHERE invited_by=?",(uid,));total=c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE invited_by=? AND total_games>0",(uid,));played=c.fetchone()[0]
-        c.execute("SELECT user_id,username,total_games FROM users WHERE invited_by=? ORDER BY total_games DESC LIMIT 10",(uid,))
-        friends=[{'user_id':r[0],'username':r[1] or f'ID{r[0]}','games':r[2]} for r in c.fetchall()];conn.close()
-        return {'total':total,'played':played,'friends':friends}
-    return execute_sqlite_with_retry(_do)
-
-def get_admin_referral_stats_sync():
-    def _do():
-        conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
-        c.execute("SELECT COUNT(*) FROM users WHERE invited_by IS NOT NULL");total_refs=c.fetchone()[0]
-        c.execute("SELECT COUNT(DISTINCT invited_by) FROM users WHERE invited_by IS NOT NULL");active_refs=c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE referral_claimed=1");claimed=c.fetchone()[0]
-        c.execute("SELECT u.user_id,u.username,u.referral_count,u.balance FROM users u WHERE u.referral_count>0 ORDER BY u.referral_count DESC LIMIT 20")
-        top=[{'user_id':r[0],'username':r[1] or f'ID{r[0]}','count':r[2] or 0,'balance':r[3] or 0} for r in c.fetchall()]
-        c.execute("SELECT COALESCE(SUM(referral_count),0) FROM users");total_ref_earnings=c.fetchone()[0]*REFERRAL_BONUS_INVITER
-        conn.close()
-        return {'total_referrals':total_refs,'active_referrers':active_refs,'claimed_rewards':claimed,'top_referrers':top,'total_earnings':total_ref_earnings}
-    return execute_sqlite_with_retry(_do)
-
 def claim_daily_bonus_sync(uid):
     now=int(time.time());today_start=now-(now%86400)
     def _do():
@@ -240,7 +188,7 @@ def init_sqlite_db():
     c.execute('''CREATE TABLE IF NOT EXISTS support_messages(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,message TEXT NOT NULL,created_at INTEGER NOT NULL,is_read INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS crypto_payments(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,amount_points INTEGER NOT NULL,price_usdt REAL NOT NULL,payment_id TEXT UNIQUE NOT NULL,invoice_id TEXT,status TEXT DEFAULT 'pending',created_at INTEGER NOT NULL)''')
     c.execute('''CREATE TABLE IF NOT EXISTS achievements(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,achievement_id TEXT NOT NULL,achieved_at INTEGER NOT NULL,UNIQUE(user_id,achievement_id))''')
-    for col,typ in [('display_name','TEXT'),('avatar_emoji',"TEXT DEFAULT '🦊'"),('invited_by','INTEGER DEFAULT NULL'),('referral_claimed','INTEGER DEFAULT 0'),('referral_count','INTEGER DEFAULT 0'),('last_cashback','INTEGER DEFAULT 0'),('daily_bonus_last','INTEGER DEFAULT 0'),('daily_bonus_streak','INTEGER DEFAULT 0')]:
+    for col,typ in [('display_name','TEXT'),('avatar_emoji',"TEXT DEFAULT '🦊'"),('last_cashback','INTEGER DEFAULT 0'),('daily_bonus_last','INTEGER DEFAULT 0'),('daily_bonus_streak','INTEGER DEFAULT 0')]:
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
         except: pass
     conn.commit();conn.close()
@@ -317,75 +265,13 @@ async def handle_game_result(request):
     try:
         data=await request.json();uid=int(data.get('user_id'));game=data.get('game');bet=data.get('bet');win=data.get('win');wa=data.get('win_amount',0)
         if not uid or not game or bet is None: return web.json_response({'success':False,'error':'Missing fields'},status=400)
-        # Получаем количество игр ДО обновления
-        tg_before = get_user_stats_sync(uid)[1]
         cur=get_balance_sync(uid);new=cur+wa if win else cur-bet
         update_balance_sync(uid,new);update_stats_sync(uid,win);save_game_history_sync(uid,bet,wa if win else 0,game)
-        # Проверяем реферальный бонус после первой игры
-        if tg_before == 0:
-            claim_result = claim_referral_reward_sync(uid)
-            if claim_result:
-                try:
-                    await bot.send_message(claim_result[0], f"🎉 Ваш друг сыграл первую игру!\n💰 Вы получили +{REFERRAL_BONUS_INVITER} 💎!")
-                except:
-                    pass
         bal,tg,w=get_user_stats_sync(uid);new_achs=check_achievements_sync(uid,new,tg,w,wa if win else 0)
         return web.json_response({'success':True,'new_balance':new,'win':win})
     except Exception as e:
         logger.error(f"game_result error: {e}")
         return web.json_response({'success':False,'error':str(e)},status=500)
-
-async def handle_referral_join(request):
-    try:
-        data=await request.json();invited=int(data.get('user_id'));inviter=int(data.get('inviter_id'))
-        if not invited or not inviter: return web.json_response({'success':False,'error':'user_id and inviter_id required'},status=400)
-        if invited==inviter: return web.json_response({'success':False,'error':'Cannot refer yourself'},status=400)
-        result=process_referral_sync(inviter,invited)
-        if result is None: return web.json_response({'success':False,'error':'Already referred'},status=200)
-        return web.json_response({'success':True,'message':f'+{REFERRAL_BONUS_INVITED} баллов за переход!','bonus':REFERRAL_BONUS_INVITED})
-    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
-
-async def handle_get_referral_stats(request):
-    try:
-        data=await request.json();uid=int(data.get('user_id'))
-        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        stats=get_referral_stats_sync(uid);stats['balance']=get_balance_sync(uid)
-        return web.json_response({'success':True,'stats':stats})
-    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
-
-async def handle_get_referral_link(request):
-    try:
-        data=await request.json();uid=data.get('user_id')
-        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        link=f"https://game-bar-web.vercel.app?user_id=none&ref={uid}"
-        return web.json_response({'success':True,'link':link,'user_id':uid})
-    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
-
-async def handle_get_admin_referral_stats(request):
-    try:
-        data=await request.json();uid=int(data.get('user_id','0'))
-        if uid not in ADMIN_IDS: return web.json_response({'success':False,'error':'Access denied'},status=403)
-        stats=get_admin_referral_stats_sync()
-        return web.json_response({'success':True,'stats':stats})
-    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
-
-async def handle_daily_bonus(request):
-    try:
-        data=await request.json();uid=int(data.get('user_id'))
-        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        result=claim_daily_bonus_sync(uid)
-        if not result: return web.json_response({'success':False,'error':'User not found'},status=404)
-        if result.get('error')=='already_claimed': return web.json_response({'success':False,'error':'already_claimed','next':result['next']})
-        return web.json_response({'success':True,'bonus':result['bonus'],'streak':result['streak'],'new_balance':result['new_balance']})
-    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
-
-async def handle_daily_bonus_status(request):
-    try:
-        data=await request.json();uid=int(data.get('user_id'))
-        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        status=get_daily_bonus_status_sync(uid)
-        return web.json_response({'success':True,'status':status})
-    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_claim_ad_reward(request):
     try:
@@ -475,21 +361,23 @@ async def handle_check_payment(request):
             return web.json_response({'success':True,'status':invoice['status'],'message':f'⏳ Статус: {invoice["status"]}.'})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
-async def handle_crypto_webhook(request):
+async def handle_daily_bonus(request):
     try:
-        body=await request.text();signature=request.headers.get('crypto-pay-api-sign','')
-        secret=hashlib.sha256(CRYPTOPAY_TOKEN.encode()).digest()
-        expected_signature=hmac.new(secret,body.encode(),hashlib.sha256).hexdigest()
-        if signature!=expected_signature: return web.json_response({'error':'Invalid signature'},status=403)
-        data=json.loads(body)
-        if data.get('update_type')=='invoice_paid':
-            invoice_id=str(data['payload']['invoice_id']);confirmed=confirm_payment(invoice_id)
-            if confirmed:
-                uid,amount=confirmed
-                try: await bot.send_message(uid,f"✅ <b>Платёж подтверждён!</b>\n\n💰 Начислено: <b>{amount} 💎</b>\n💵 Сумма: <b>{PRICE_LIST.get(amount,'?')} USDT</b>\n\nСпасибо за пополнение! 🎉",parse_mode="HTML")
-                except: pass
-        return web.json_response({'success':True})
-    except Exception as e: return web.json_response({'error':str(e)},status=500)
+        data=await request.json();uid=int(data.get('user_id'))
+        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
+        result=claim_daily_bonus_sync(uid)
+        if not result: return web.json_response({'success':False,'error':'User not found'},status=404)
+        if result.get('error')=='already_claimed': return web.json_response({'success':False,'error':'already_claimed','next':result['next']})
+        return web.json_response({'success':True,'bonus':result['bonus'],'streak':result['streak'],'new_balance':result['new_balance']})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
+
+async def handle_daily_bonus_status(request):
+    try:
+        data=await request.json();uid=int(data.get('user_id'))
+        if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
+        status=get_daily_bonus_status_sync(uid)
+        return web.json_response({'success':True,'status':status})
+    except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_get_price_list(request):
     return web.json_response({'success':True,'prices':{str(k):v for k,v in PRICE_LIST.items()}})
@@ -507,15 +395,10 @@ app.router.add_post('/api/save_profile',handle_save_profile)
 app.router.add_post('/api/game_result',handle_game_result)
 app.router.add_post('/api/claim_ad_reward',handle_claim_ad_reward)
 app.router.add_post('/api/claim_free_bonus',handle_claim_free_bonus)
-app.router.add_post('/api/referral_join',handle_referral_join)
-app.router.add_post('/api/get_referral_stats',handle_get_referral_stats)
-app.router.add_post('/api/get_referral_link',handle_get_referral_link)
-app.router.add_post('/api/get_admin_referral_stats',handle_get_admin_referral_stats)
 app.router.add_post('/api/daily_bonus',handle_daily_bonus)
 app.router.add_post('/api/daily_bonus_status',handle_daily_bonus_status)
 app.router.add_post('/api/create_invoice',handle_create_invoice)
 app.router.add_post('/api/check_payment',handle_check_payment)
-app.router.add_post('/api/crypto_webhook',handle_crypto_webhook)
 app.router.add_get('/api/get_price_list',handle_get_price_list)
 app.router.add_get('/health',health);app.router.add_get('/',health)
 

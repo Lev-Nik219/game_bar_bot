@@ -17,9 +17,6 @@ from keyboards.admin import (
 logger = logging.getLogger(__name__)
 router = Router()
 
-REFERRAL_BONUS_INVITER = 100
-REFERRAL_BONUS_INVITED = 25
-
 class AdminStates(StatesGroup):
     waiting_for_target_id = State()
     waiting_for_amount = State()
@@ -30,24 +27,6 @@ def cancel_keyboard():
 
 def back_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]])
-
-def get_admin_referral_stats_local():
-    """Локальная функция статистики рефералов (из SQLite)"""
-    try:
-        conn = sqlite3.connect("casino.db")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM users WHERE invited_by IS NOT NULL"); total_refs = c.fetchone()[0]
-        c.execute("SELECT COUNT(DISTINCT invited_by) FROM users WHERE invited_by IS NOT NULL"); active_refs = c.fetchone()[0]
-        c.execute("SELECT COUNT(*) FROM users WHERE referral_claimed=1"); claimed = c.fetchone()[0]
-        c.execute("SELECT user_id, username, referral_count, balance FROM users WHERE referral_count > 0 ORDER BY referral_count DESC LIMIT 20")
-        top = [{'user_id': r[0], 'username': r[1] or f'ID{r[0]}', 'count': r[2] or 0, 'balance': r[3] or 0} for r in c.fetchall()]
-        c.execute("SELECT COALESCE(SUM(referral_count), 0) FROM users"); total_ref_earnings = c.fetchone()[0] * REFERRAL_BONUS_INVITER
-        conn.close()
-        return {'total_referrals': total_refs, 'active_referrers': active_refs, 'claimed_rewards': claimed, 'top_referrers': top, 'total_earnings': total_ref_earnings}
-    except Exception as e:
-        logger.error(f"get_admin_referral_stats_local error: {e}")
-        return None
 
 @router.message(Command("admin"))
 async def cmd_admin(message: types.Message):
@@ -78,18 +57,10 @@ async def admin_give_amount(message: types.Message, state: FSMContext):
     data = await state.get_data(); target_id = data.get("target_id")
     target_balance, *_ = await get_user(target_id, None); new_balance = target_balance + amount
     await update_balance(target_id, new_balance)
-    
-    # Синхронизация с SQLite для Mini App
     try:
-        conn = sqlite3.connect("casino.db")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, target_id))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"SQLite sync error: {e}")
-    
+        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
+        c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, target_id)); conn.commit(); conn.close()
+    except Exception as e: logger.error(f"SQLite sync error: {e}")
     await message.answer(f"✅ Пользователю {target_id} начислено {amount} 💎.\nНовый баланс: {new_balance} 💎.")
     await state.clear(); await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
 
@@ -117,18 +88,10 @@ async def admin_take_amount(message: types.Message, state: FSMContext):
     if target_balance < amount: await message.answer(f"❌ Недостаточно баллов. У пользователя {target_balance} 💎."); return
     new_balance = target_balance - amount
     await update_balance(target_id, new_balance)
-    
-    # Синхронизация с SQLite для Mini App
     try:
-        conn = sqlite3.connect("casino.db")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        cursor = conn.cursor()
-        cursor.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, target_id))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"SQLite sync error: {e}")
-    
+        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
+        c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, target_id)); conn.commit(); conn.close()
+    except Exception as e: logger.error(f"SQLite sync error: {e}")
     await message.answer(f"✅ У пользователя {target_id} списано {amount} 💎.\nНовый баланс: {new_balance} 💎.")
     await state.clear(); await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
 
@@ -176,31 +139,6 @@ async def user_info_callback(callback: types.CallbackQuery):
     )
     await callback.message.edit_text(info_text, parse_mode="HTML", reply_markup=back_keyboard()); await callback.answer()
 
-# ---------- РЕФЕРАЛЬНАЯ СТАТИСТИКА ----------
-@router.callback_query(F.data == "admin_referral_stats")
-async def admin_referral_stats_callback(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS: await callback.answer("❌ Доступ запрещён", show_alert=True); return
-    try:
-        stats = get_admin_referral_stats_local()
-        if not stats: 
-            await callback.answer("Ошибка загрузки статистики", show_alert=True)
-            return
-        top_text = "\n".join([f"{i+1}. {'@'+r['username'] if r['username'] else 'ID'+str(r['user_id'])} — {r['count']} друзей, 💎{r['balance']}" for i,r in enumerate(stats['top_referrers'][:10])])
-        text = (
-            f"📊 <b>Реферальная статистика</b>\n\n"
-            f"👥 Всего рефералов: {stats['total_referrals']}\n"
-            f"👤 Активных рефереров: {stats['active_referrers']}\n"
-            f"✅ Начислено бонусов: {stats['claimed_rewards']}\n"
-            f"💰 Всего выплат: ~{stats['total_earnings']} 💎\n\n"
-            f"🎁 За переход: {REFERRAL_BONUS_INVITED} 💎\n"
-            f"🎉 За игру: {REFERRAL_BONUS_INVITER} 💎\n\n"
-            f"<b>🏆 Топ рефереров:</b>\n{top_text or 'Пока нет'}"
-        )
-        await callback.message.edit_text(text, parse_mode="HTML", reply_markup=back_keyboard()); await callback.answer()
-    except Exception as e:
-        logger.error(f"Referral stats error: {e}")
-        await callback.answer("Ошибка загрузки статистики", show_alert=True)
-
 # ---------- СТАТИСТИКА ----------
 @router.callback_query(F.data == "admin_stats")
 async def admin_stats_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -211,9 +149,7 @@ async def admin_stats_callback(callback: types.CallbackQuery, state: FSMContext)
 async def admin_stats_main_callback(callback: types.CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS: await callback.answer("❌ Доступ запрещён", show_alert=True); return
     try:
-        conn = sqlite3.connect("casino.db")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        c = conn.cursor()
+        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
         c.execute("SELECT COUNT(*) FROM users"); total_users = c.fetchone()[0]
         c.execute("SELECT COUNT(*) FROM game_history"); total_games = c.fetchone()[0]
         c.execute("SELECT COALESCE(SUM(bet_amount), 0) FROM game_history"); total_bets = c.fetchone()[0]
@@ -259,20 +195,14 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
     text = message.text
     await message.answer("⏳ Начинаю массовую рассылку...")
     try:
-        conn = sqlite3.connect("casino.db")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        c = conn.cursor()
-        c.execute("SELECT user_id FROM users")
-        users = [row[0] for row in c.fetchall()]
-        conn.close()
+        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
+        c.execute("SELECT user_id FROM users"); users = [row[0] for row in c.fetchall()]; conn.close()
         success = 0; failed = 0
         for user_id in users:
             try:
                 await message.bot.send_message(user_id, f"📢 <b>Массовая рассылка от администратора</b>\n\n{text}", parse_mode="HTML")
-                success += 1
-                await asyncio.sleep(0.05)
-            except Exception:
-                failed += 1
+                success += 1; await asyncio.sleep(0.05)
+            except Exception: failed += 1
         await message.answer(f"✅ Массовая рассылка завершена.\n\n📨 Успешно: {success}\n❌ Неудачно: {failed}")
     except Exception as e:
         logger.error(f"Broadcast error: {e}")
@@ -287,12 +217,9 @@ async def admin_cashback_callback(callback: types.CallbackQuery):
     try: await callback.answer()
     except: pass
     try:
-        conn = sqlite3.connect("casino.db")
-        conn.execute("PRAGMA busy_timeout = 5000")
-        c = conn.cursor()
+        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
         week_ago = int(time.time()) - 7 * 86400
-        c.execute("SELECT user_id FROM users")
-        users = [row[0] for row in c.fetchall()]
+        c.execute("SELECT user_id FROM users"); users = [row[0] for row in c.fetchall()]
         total_cashback = 0; users_notified = 0
         for uid in users:
             c.execute("SELECT COALESCE(SUM(bet_amount), 0) FROM game_history WHERE user_id = ? AND played_at >= ? AND win_amount = 0", (uid, week_ago))
@@ -300,8 +227,7 @@ async def admin_cashback_callback(callback: types.CallbackQuery):
             if losses > 0:
                 cashback = int(losses * 5 / 100)
                 if cashback > 0:
-                    c.execute("SELECT balance FROM users WHERE user_id = ?", (uid,))
-                    bal = c.fetchone()[0]
+                    c.execute("SELECT balance FROM users WHERE user_id = ?", (uid,)); bal = c.fetchone()[0]
                     c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (bal + cashback, uid))
                     total_cashback += cashback; users_notified += 1
                     try: await callback.bot.send_message(uid, f"💰 <b>Еженедельный кэшбек!</b>\n\n📊 Проигрыши за неделю: {losses} 💎\n🔄 Кэшбек 5%: +{cashback} 💎\n💳 Новый баланс: {bal + cashback} 💎", parse_mode="HTML")
