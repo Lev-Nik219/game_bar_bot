@@ -28,12 +28,24 @@ def admin_stats_back_keyboard() -> InlineKeyboardMarkup:
 def users_list_keyboard(users, page, total_pages) -> InlineKeyboardMarkup:
     keyboard = []
     for uid, username, balance, total_games in users:
-        name = f"@{username}" if username else f"ID {uid}"
-        keyboard.append([InlineKeyboardButton(text=f"🆔 {uid} | {name} | 💎 {balance}", callback_data=f"user_info_{uid}")])
+        # Показываем username если есть, иначе пишем "NoName"
+        if username:
+            name = f"@{username}"
+        else:
+            name = f"ID {uid}"
+        keyboard.append([InlineKeyboardButton(
+            text=f"🆔 {uid} | {name} | 💎 {balance}",
+            callback_data=f"user_info_{uid}"
+        )])
+    
     nav_row = []
-    if page > 0: nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_list_prev"))
-    if page < total_pages - 1: nav_row.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data="admin_list_next"))
-    if nav_row: keyboard.append(nav_row)
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="◀️ Назад", callback_data="admin_list_prev"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton(text="Вперёд ▶️", callback_data="admin_list_next"))
+    if nav_row:
+        keyboard.append(nav_row)
+    
     keyboard.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
