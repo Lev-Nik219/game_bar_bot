@@ -357,7 +357,7 @@ async def handle_get_referral_link(request):
     try:
         data=await request.json();uid=data.get('user_id')
         if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        link=f"https://t.me/GamesAsino_bot/GamesAsino?startapp=ref_{uid}"
+        link=f"https://game-bar-web.vercel.app?user_id=none&ref={uid}"
         return web.json_response({'success':True,'link':link,'user_id':uid})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
