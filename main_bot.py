@@ -354,8 +354,11 @@ async def handle_create_invoice(request):
         async with aiohttp.ClientSession() as session:
             headers={'Crypto-Pay-API-Token':CRYPTOPAY_TOKEN,'Content-Type':'application/json'}
             payload={'asset':'USDT','amount':str(price_usdt),'description':f'Пополнение {amount_points} баллов для Game Bar Casino','payload':json.dumps({'user_id':uid,'amount_points':amount_points}),'allow_comments':False,'allow_anonymous':False}
-            try: async with session.post(f'{CRYPTOPAY_API_URL}/createInvoice',json=payload,headers=headers) as resp: result=await resp.json()
-            except Exception as e: return web.json_response({'success':False,'error':f'CryptoPay API error: {str(e)}'},status=500)
+            try:
+                async with session.post(f'{CRYPTOPAY_API_URL}/createInvoice',json=payload,headers=headers) as resp:
+                    result = await resp.json()
+            except Exception as e:
+                return web.json_response({'success':False,'error':f'CryptoPay API error: {str(e)}'},status=500)
             if not result.get('ok'): return web.json_response({'success':False,'error':f'CryptoPay error: {result.get("error","unknown")}'},status=500)
             invoice=result['result'];payment_id=str(invoice['invoice_id']);invoice_url=invoice['pay_url']
             create_payment(uid,amount_points,price_usdt,payment_id,str(invoice['invoice_id']))
@@ -505,27 +508,19 @@ async def handle_referral_join(request):
         if not uid or not ref_id: return web.json_response({'success':False,'error':'user_id and ref_id required'},status=400)
         ref_id=int(ref_id)
         if ref_id==uid: return web.json_response({'success':False,'error':'Нельзя ввести свой ID'})
-        
-        # Проверяем, не вводил ли уже ЭТОТ промокод
         def _check_this_ref():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
             c.execute("SELECT id FROM user_inventory WHERE user_id=? AND item_id=?",(uid,f"ref_{ref_id}"));row=c.fetchone();conn.close();return row is not None
-        already_used_this_ref=execute_sqlite_with_retry(_check_this_ref)
-        if already_used_this_ref: return web.json_response({'success':False,'error':'Вы уже активировали промокод этого друга'})
-        
-        # Записываем промокод и начисляем бонусы
+        already_used=execute_sqlite_with_retry(_check_this_ref)
+        if already_used: return web.json_response({'success':False,'error':'Вы уже активировали промокод этого друга'})
         def _set_ref():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
-            # Записываем в invited_by ПЕРВЫЙ раз
-            c.execute("UPDATE users SET invited_by=COALESCE(invited_by,?) WHERE user_id=?", (ref_id, uid))
-            # Запоминаем что этот промокод уже использован
-            c.execute("INSERT INTO user_inventory (user_id, item_id, purchased_at) VALUES (?, ?, ?)", (uid, f"ref_{ref_id}", int(time.time())))
-            # Начисляем бонусы
-            c.execute("UPDATE users SET balance=balance+50 WHERE user_id=?", (ref_id,))
-            c.execute("UPDATE users SET balance=balance+50 WHERE user_id=?", (uid,))
+            c.execute("UPDATE users SET invited_by=COALESCE(invited_by,?) WHERE user_id=?",(ref_id,uid))
+            c.execute("INSERT INTO user_inventory(user_id,item_id,purchased_at) VALUES(?,?,?)",(uid,f"ref_{ref_id}",int(time.time())))
+            c.execute("UPDATE users SET balance=balance+50 WHERE user_id=?",(ref_id,))
+            c.execute("UPDATE users SET balance=balance+50 WHERE user_id=?",(uid,))
             conn.commit();conn.close()
         execute_sqlite_with_retry(_set_ref)
-        
         return web.json_response({'success':True,'message':'🎉 Промокод активирован! +50 баллов вам и другу!'})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
@@ -533,7 +528,7 @@ async def handle_get_referral_link(request):
     try:
         data=await request.json();uid=int(data.get('user_id'))
         if not uid: return web.json_response({'success':False,'error':'user_id required'},status=400)
-        link=f"https://t.me/GamesAsino_bot/GamesAsino"
+        link="https://t.me/GamesAsino_bot/GamesAsino"
         def _count():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
             c.execute("SELECT COUNT(*) FROM users WHERE invited_by=?",(uid,));count=c.fetchone()[0];conn.close();return count
