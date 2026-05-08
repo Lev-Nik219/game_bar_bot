@@ -260,13 +260,19 @@ async def admin_clear_db_confirm_callback(callback: types.CallbackQuery):
         
         # Очищаем SQLite (Mini App)
         conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 10000"); c = conn.cursor()
-        c.execute("DELETE FROM users"); c.execute("DELETE FROM game_history")
-        c.execute("DELETE FROM crypto_payments"); c.execute("DELETE FROM support_messages")
-        c.execute("DELETE FROM achievements"); c.execute("DELETE FROM sqlite_sequence")
+        c.execute("DELETE FROM users")
+        c.execute("DELETE FROM game_history")
+        c.execute("DELETE FROM crypto_payments")
+        c.execute("DELETE FROM support_messages")
+        c.execute("DELETE FROM achievements")
+        c.execute("DELETE FROM user_inventory")       # ← Включая промокоды (ref_XXXX)
+        c.execute("DELETE FROM active_boosts")        # ← Бусты тоже
+        c.execute("DELETE FROM sqlite_sequence")
         conn.commit(); conn.close()
         
         # Очищаем PostgreSQL (бот)
         from database import execute_query
+        await execute_query("UPDATE users SET invited_by = NULL")  # ← СНАЧАЛА сброс рефералов
         await execute_query("DELETE FROM users")
         await execute_query("DELETE FROM game_history")
         await execute_query("DELETE FROM crypto_transactions")
