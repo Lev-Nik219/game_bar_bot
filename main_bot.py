@@ -24,7 +24,7 @@ AD_REWARD_AMOUNT = 25
 FREE_BONUS_AMOUNT = 10
 AD_COOLDOWN_SECONDS = 20
 
-CRYPTOPAY_TOKEN = os.environ.get('CRYPTOPAY_TOKEN', '455143:AA35WjAeKxzuurvYbMCZewcqzQ7VmtAQbDZ')
+CRYPTOPAY_TOKEN = os.environ.get('CRYPTOPAY_TOKEN', '455143:AAPG9UlPyvoRj9opI3wL3KzmocGA5yz1lZd')
 CRYPTOPAY_API_URL = 'https://pay.crypt.bot/api'
 
 PRICE_LIST = {100:5, 250:20, 500:35, 750:50, 1000:65}
@@ -357,8 +357,7 @@ async def handle_create_invoice(request):
             try:
                 async with session.post(f'{CRYPTOPAY_API_URL}/createInvoice',json=payload,headers=headers) as resp:
                     result = await resp.json()
-            except Exception as e:
-                return web.json_response({'success':False,'error':f'CryptoPay API error: {str(e)}'},status=500)
+            except Exception as e: return web.json_response({'success':False,'error':f'CryptoPay API error: {str(e)}'},status=500)
             if not result.get('ok'): return web.json_response({'success':False,'error':f'CryptoPay error: {result.get("error","unknown")}'},status=500)
             invoice=result['result'];payment_id=str(invoice['invoice_id']);invoice_url=invoice['pay_url']
             create_payment(uid,amount_points,price_usdt,payment_id,str(invoice['invoice_id']))
@@ -393,8 +392,7 @@ async def handle_check_payment(request):
             try:
                 async with session.get(f'{CRYPTOPAY_API_URL}/getInvoices',params=params,headers=headers,timeout=10) as resp:
                     result = await resp.json()
-            except Exception:
-                return web.json_response({'success':True,'status':'api_error','message':'⏳ Ошибка связи с CryptoPay.'})
+            except Exception: return web.json_response({'success':True,'status':'api_error','message':'⏳ Ошибка связи с CryptoPay.'})
             if not result.get('ok') or not result['result']['items']: return web.json_response({'success':True,'status':'not_found','message':'❌ Счёт не найден.'})
             invoice=result['result']['items'][0]
             if invoice['status']=='paid':
@@ -521,7 +519,7 @@ async def handle_referral_join(request):
             c.execute("UPDATE users SET balance=balance+25 WHERE user_id=?",(uid,))
             conn.commit();conn.close()
         execute_sqlite_with_retry(_set_ref)
-        return web.json_response({'success':True,'message':'🎉 Промокод активирован! +50 баллов вам и другу!'})
+        return web.json_response({'success':True,'message':'🎉 Промокод активирован! +25 баллов вам и другу!'})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
 async def handle_get_referral_link(request):
