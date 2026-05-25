@@ -232,10 +232,7 @@ async def handle_get_balance(request):
             if not r:
                 c.execute("INSERT INTO users(user_id,balance,total_games,wins,avatar_emoji) VALUES(?,20,0,0,'🦊')",(uid,))
                 conn.commit()
-                async def sync_pg():
-                    try: await execute_query("INSERT INTO users(user_id,balance,total_games,wins) VALUES($1,$2,$3,$4) ON CONFLICT(user_id) DO UPDATE SET balance=$2",uid,20,0,0)
-                    except: pass
-                asyncio.ensure_future(sync_pg())
+                # PG отключена — синхронизация не нужна
                 conn.close();return 20
             conn.close();return r[0]
         bal=execute_sqlite_with_retry(_do);return web.json_response({'success':True,'balance':bal})
@@ -298,16 +295,16 @@ async def handle_game_result(request):
         if not uid or not game or bet is None: return web.json_response({'success':False,'error':'Missing fields'},status=400)
         cur=get_balance_sync(uid);new=cur+wa if win else cur-bet
         update_balance_sync(uid,new);update_stats_sync(uid,win);save_game_history_sync(uid,bet,wa if win else 0,game)
-        try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2",new,uid)
-        except: pass
+        #try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2",new,uid)
+        #except: pass
         def _add_exp():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor()
             try: c.execute("ALTER TABLE users ADD COLUMN exp INTEGER DEFAULT 0")
             except: pass
             c.execute("UPDATE users SET exp=COALESCE(exp,0)+? WHERE user_id=?",(50 if win else 25,uid));conn.commit();conn.close()
         execute_sqlite_with_retry(_add_exp)
-        try: await execute_query("UPDATE users SET exp=COALESCE(exp,0)+$1,total_games=total_games+1,wins=wins+$2 WHERE user_id=$3",50 if win else 25,1 if win else 0,uid)
-        except: pass
+        #try: await execute_query("UPDATE users SET exp=COALESCE(exp,0)+$1,total_games=total_games+1,wins=wins+$2 WHERE user_id=$3",50 if win else 25,1 if win else 0,uid)
+        #except: pass
         bal,tg,w=get_user_stats_sync(uid);check_achievements_sync(uid,new,tg,w,wa if win else 0)
         return web.json_response({'success':True,'new_balance':new,'win':win})
     except Exception as e:
@@ -324,8 +321,8 @@ async def handle_claim_ad_reward(request):
             return web.json_response({'success':False,'error':'cooldown','remaining':remaining},status=200)
         cur=get_balance_sync(uid);new=cur+AD_REWARD_AMOUNT
         update_balance_sync(uid,new);set_last_ad_time_sync(uid,now)
-        try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2",new,uid)
-        except: pass
+        #try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2",new,uid)
+        #except: pass
         return web.json_response({'success':True,'new_balance':new,'reward':AD_REWARD_AMOUNT})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
@@ -339,8 +336,8 @@ async def handle_claim_free_bonus(request):
             return web.json_response({'success':False,'error':'cooldown','remaining':remaining},status=200)
         cur=get_balance_sync(uid);new=cur+FREE_BONUS_AMOUNT
         update_balance_sync(uid,new);set_last_ad_time_sync(uid,now)
-        try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2",new,uid)
-        except: pass
+        #try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2",new,uid)
+        #except: pass
         return web.json_response({'success':True,'new_balance':new,'reward':FREE_BONUS_AMOUNT})
     except Exception as e: return web.json_response({'success':False,'error':str(e)},status=500)
 
@@ -467,8 +464,8 @@ async def handle_shop_buy(request):
         bal=get_balance_sync(uid)
         if bal<item["price"]: return web.json_response({'success':False,'error':f'Недостаточно баллов! Нужно {item["price"]} 💎'})
         new_bal=bal-item["price"];update_balance_sync(uid,new_bal)
-        try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2",new_bal,uid)
-        except: pass
+        #try: await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2",new_bal,uid)
+        #except: pass
         def _add():
             conn=sqlite3.connect(DB_NAME,timeout=10);conn.execute("PRAGMA busy_timeout=5000");c=conn.cursor();now=int(time.time())
             if item["type"] in ["avatar","service"]:c.execute("INSERT INTO user_inventory(user_id,item_id,purchased_at) VALUES(?,?,?)",(uid,item_id,now))
