@@ -568,7 +568,9 @@ async def on_startup():
     await bot.set_my_commands([BotCommand(command="start",description="Запустить бота"),BotCommand(command="myid",description="Мой Telegram ID"),BotCommand(command="admin",description="Админ-панель")])
     logger.info("Бот запущен (только SQLite)")
 
-async def on_shutdown(): await bot.session.close();await close_db_pool()
+async def on_shutdown():
+    await bot.session.close()
+    # await close_db_pool()  # PG отключена
 
 async def main():
     port=int(os.environ.get('PORT',10000));await on_startup()
