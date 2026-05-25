@@ -561,9 +561,12 @@ app.router.add_post('/api/referral_join',handle_referral_join)
 app.router.add_post('/api/get_referral_link',handle_get_referral_link)
 
 async def on_startup():
-    await init_db_pool();await create_db();init_sqlite_db()
+    # PostgreSQL отключена — используем только SQLite
+    # await init_db_pool()
+    # await create_db()
+    init_sqlite_db()
     await bot.set_my_commands([BotCommand(command="start",description="Запустить бота"),BotCommand(command="myid",description="Мой Telegram ID"),BotCommand(command="admin",description="Админ-панель")])
-    logger.info("Бот запущен")
+    logger.info("Бот запущен (только SQLite)")
 
 async def on_shutdown(): await bot.session.close();await close_db_pool()
 
