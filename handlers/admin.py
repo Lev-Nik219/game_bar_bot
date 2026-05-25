@@ -40,7 +40,11 @@ async def cmd_admin(message: types.Message):
 async def admin_give_callback(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS: await callback.answer("❌ Доступ запрещён", show_alert=True); return
     await state.set_state(AdminStates.waiting_for_target_id)
-    await callback.message.edit_text("Введите ID пользователя:", reply_markup=cancel_keyboard()); await callback.answer()
+    try:
+        await callback.message.edit_text("✏️ Введите ID пользователя для начисления баллов:", reply_markup=cancel_keyboard())
+    except:
+        pass
+    await callback.answer()
 
 @router.message(AdminStates.waiting_for_target_id, F.text)
 async def admin_give_target_id(message: types.Message, state: FSMContext):
@@ -69,7 +73,11 @@ async def admin_give_amount(message: types.Message, state: FSMContext):
 async def admin_take_callback(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id not in ADMIN_IDS: await callback.answer("❌ Доступ запрещён", show_alert=True); return
     await state.set_state(AdminStates.waiting_for_target_id)
-    await callback.message.edit_text("Введите ID пользователя:", reply_markup=cancel_keyboard()); await callback.answer()
+    try:
+        await callback.message.edit_text("✏️ Введите ID пользователя для списания баллов:", reply_markup=cancel_keyboard())
+    except:
+        pass
+    await callback.answer()
 
 @router.message(AdminStates.waiting_for_target_id, F.text)
 async def admin_take_target_id(message: types.Message, state: FSMContext):
