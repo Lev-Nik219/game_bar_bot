@@ -9,13 +9,15 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import ADMIN_IDS
-from database import get_user, update_balance, get_user_stats, get_all_users, get_users_count, execute_query, get_deposit_stats
+from database import get_user, update_balance, get_user_stats, get_deposit_stats
 from keyboards.admin import (
     admin_main_keyboard, admin_stats_keyboard, admin_stats_back_keyboard, users_list_keyboard, clear_db_confirm_keyboard
 )
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+DB_NAME = "casino.db"
 
 class AdminStates(StatesGroup):
     waiting_for_target_id = State()
@@ -27,6 +29,46 @@ def cancel_keyboard():
 
 def back_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]])
+
+# ===== SQLITE-ФУНКЦИИ (вместо PostgreSQL) =====
+def get_all_users_sqlite(offset=0, limit=5):
+    conn = sqlite3.connect(DB_NAME, timeout=10)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    c = conn.cursor()
+    c.execute("SELECT user_id, username, balance, COALESCE(total_games, 0) FROM users ORDER BY user_id LIMIT ? OFFSET ?", (limit, offset))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_users_count_sqlite():
+    conn = sqlite3.connect(DB_NAME, timeout=10)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users")
+    count = c.fetchone()[0]
+    conn.close()
+    return count
+
+def get_user_stats_sqlite(user_id):
+    conn = sqlite3.connect(DB_NAME, timeout=10)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    c = conn.cursor()
+    c.execute("SELECT balance, COALESCE(total_games, 0), COALESCE(wins, 0) FROM users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return row[0], row[1], row[2]
+    return None
+
+def update_balance_sqlite(uid, new_balance):
+    conn = sqlite3.connect(DB_NAME, timeout=10)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    c = conn.cursor()
+    c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, uid))
+    conn.commit()
+    conn.close()
+
+# =============================================
 
 @router.message(Command("admin"))
 async def cmd_admin(message: types.Message):
@@ -59,12 +101,26 @@ async def admin_give_amount(message: types.Message, state: FSMContext):
     except ValueError: await message.answer("❌ Введите число.", reply_markup=cancel_keyboard()); return
     if amount <= 0: await message.answer("❌ Сумма должна быть положительной.", reply_markup=cancel_keyboard()); return
     data = await state.get_data(); target_id = data.get("target_id")
-    target_balance, *_ = await get_user(target_id, None); new_balance = target_balance + amount
-    await update_balance(target_id, new_balance)
+    
+    # Получаем баланс из SQLite
+    stats = get_user_stats_sqlite(target_id)
+    if not stats:
+        await message.answer("❌ Пользователь не найден в базе.")
+        await state.clear()
+        return
+    target_balance = stats[0]
+    new_balance = target_balance + amount
+    
+    # Обновляем SQLite
+    update_balance_sqlite(target_id, new_balance)
+    
+    # Пробуем обновить PostgreSQL (если доступна)
     try:
-        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
-        c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, target_id)); conn.commit(); conn.close()
-    except Exception as e: logger.error(f"SQLite sync error: {e}")
+        from database import execute_query
+        await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2", new_balance, target_id)
+    except:
+        pass
+    
     await message.answer(f"✅ Пользователю {target_id} начислено {amount} 💎.\nНовый баланс: {new_balance} 💎.")
     await state.clear(); await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
 
@@ -92,14 +148,31 @@ async def admin_take_amount(message: types.Message, state: FSMContext):
     except ValueError: await message.answer("❌ Введите число.", reply_markup=cancel_keyboard()); return
     if amount <= 0: await message.answer("❌ Сумма должна быть положительной.", reply_markup=cancel_keyboard()); return
     data = await state.get_data(); target_id = data.get("target_id")
-    target_balance, *_ = await get_user(target_id, None)
-    if target_balance < amount: await message.answer(f"❌ Недостаточно баллов. У пользователя {target_balance} 💎."); return
+    
+    # Получаем баланс из SQLite
+    stats = get_user_stats_sqlite(target_id)
+    if not stats:
+        await message.answer("❌ Пользователь не найден в базе.")
+        await state.clear()
+        return
+    target_balance = stats[0]
+    
+    if target_balance < amount:
+        await message.answer(f"❌ Недостаточно баллов. У пользователя {target_balance} 💎.")
+        return
+    
     new_balance = target_balance - amount
-    await update_balance(target_id, new_balance)
+    
+    # Обновляем SQLite
+    update_balance_sqlite(target_id, new_balance)
+    
+    # Пробуем обновить PostgreSQL (если доступна)
     try:
-        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
-        c.execute("UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, target_id)); conn.commit(); conn.close()
-    except Exception as e: logger.error(f"SQLite sync error: {e}")
+        from database import execute_query
+        await execute_query("UPDATE users SET balance=$1 WHERE user_id=$2", new_balance, target_id)
+    except:
+        pass
+    
     await message.answer(f"✅ У пользователя {target_id} списано {amount} 💎.\nНовый баланс: {new_balance} 💎.")
     await state.clear(); await message.answer("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
 
@@ -111,14 +184,26 @@ async def admin_list_callback(callback: types.CallbackQuery, state: FSMContext):
 
 async def show_users_page(message: types.Message, state: FSMContext, edit=False):
     data = await state.get_data(); page = data.get("page", 0); limit = 5; offset = page * limit
-    users = await get_all_users(offset, limit, active_days=0); total = await get_users_count(active_days=0)
+    
+    # Используем SQLite
+    users = get_all_users_sqlite(offset, limit)
+    total = get_users_count_sqlite()
+    
     total_pages = (total + limit - 1) // limit
     if not users:
-        text = "👥 Нет пользователей."; keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]])
+        text = "👥 Нет пользователей."
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]])
     else:
-        text = f"👥 <b>Список игроков — стр. {page+1}/{total_pages}</b>\n\n"; keyboard = users_list_keyboard(users, page, total_pages)
-    if edit: await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
-    else: await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
+        text = f"👥 <b>Список игроков — стр. {page+1}/{total_pages}</b>\n\n"
+        keyboard = users_list_keyboard(users, page, total_pages)
+    
+    if edit:
+        try:
+            await message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+        except:
+            pass
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
 
 @router.callback_query(F.data == "admin_list_next")
 async def admin_list_next(callback: types.CallbackQuery, state: FSMContext):
@@ -133,8 +218,13 @@ async def admin_list_prev(callback: types.CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("user_info_"))
 async def user_info_callback(callback: types.CallbackQuery):
     user_id = int(callback.data.replace("user_info_", ""))
-    stats = await get_user_stats(user_id)
-    if not stats: await callback.answer("❌ Пользователь не найден", show_alert=True); return
+    
+    # Используем SQLite
+    stats = get_user_stats_sqlite(user_id)
+    if not stats:
+        await callback.answer("❌ Пользователь не найден", show_alert=True)
+        return
+    
     balance, total_games, wins = stats
     win_percent = (wins / total_games * 100) if total_games > 0 else 0
     info_text = (
@@ -157,7 +247,7 @@ async def admin_stats_callback(callback: types.CallbackQuery, state: FSMContext)
 async def admin_stats_main_callback(callback: types.CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS: await callback.answer("❌ Доступ запрещён", show_alert=True); return
     try:
-        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
+        conn = sqlite3.connect(DB_NAME); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
         c.execute("SELECT COUNT(*) FROM users"); total_users = c.fetchone()[0]
         c.execute("SELECT COUNT(*) FROM game_history"); total_games = c.fetchone()[0]
         c.execute("SELECT COALESCE(SUM(bet_amount), 0) FROM game_history"); total_bets = c.fetchone()[0]
@@ -179,12 +269,16 @@ async def admin_stats_main_callback(callback: types.CallbackQuery):
 async def admin_stats_deposits_callback(callback: types.CallbackQuery):
     if callback.from_user.id not in ADMIN_IDS: await callback.answer("❌ Доступ запрещён", show_alert=True); return
     try:
-        stats = await get_deposit_stats()
+        conn = sqlite3.connect(DB_NAME); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM crypto_payments"); total_deposits = c.fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM crypto_payments WHERE status='paid'"); successful = c.fetchone()[0]
+        c.execute("SELECT COALESCE(SUM(amount_points), 0) FROM crypto_payments WHERE status='paid'"); total_amount = c.fetchone()[0]
+        conn.close()
         text = (
             f"💰 <b>Статистика пополнений</b>\n\n"
-            f"📊 Всего пополнений: {stats['total_deposits']}\n"
-            f"✅ Успешных: {stats['successful']}\n"
-            f"💵 Общая сумма: {stats['total_amount']} баллов"
+            f"📊 Всего пополнений: {total_deposits}\n"
+            f"✅ Успешных: {successful}\n"
+            f"💵 Общая сумма: {total_amount} баллов"
         )
         await callback.message.edit_text(text, parse_mode="HTML", reply_markup=admin_stats_back_keyboard()); await callback.answer()
     except Exception as e:
@@ -203,7 +297,7 @@ async def admin_broadcast_message(message: types.Message, state: FSMContext):
     text = message.text
     await message.answer("⏳ Начинаю массовую рассылку...")
     try:
-        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
+        conn = sqlite3.connect(DB_NAME); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
         c.execute("SELECT user_id FROM users"); users = [row[0] for row in c.fetchall()]; conn.close()
         success = 0; failed = 0
         for user_id in users:
@@ -225,7 +319,7 @@ async def admin_cashback_callback(callback: types.CallbackQuery):
     try: await callback.answer()
     except: pass
     try:
-        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
+        conn = sqlite3.connect(DB_NAME); conn.execute("PRAGMA busy_timeout = 5000"); c = conn.cursor()
         week_ago = int(time.time()) - 7 * 86400
         c.execute("SELECT user_id FROM users"); users = [row[0] for row in c.fetchall()]
         total_cashback = 0; users_notified = 0
@@ -262,36 +356,24 @@ async def admin_clear_db_confirm_callback(callback: types.CallbackQuery):
     try:
         import shutil
         
-        # Бэкап
         backup_name = f"casino_backup_{int(time.time())}.db"
-        shutil.copy2("casino.db", backup_name)
+        shutil.copy2(DB_NAME, backup_name)
         
-        # Очищаем SQLite (Mini App)
-        conn = sqlite3.connect("casino.db"); conn.execute("PRAGMA busy_timeout = 10000"); c = conn.cursor()
+        conn = sqlite3.connect(DB_NAME); conn.execute("PRAGMA busy_timeout = 10000"); c = conn.cursor()
         c.execute("DELETE FROM users")
         c.execute("DELETE FROM game_history")
         c.execute("DELETE FROM crypto_payments")
         c.execute("DELETE FROM support_messages")
         c.execute("DELETE FROM achievements")
-        c.execute("DELETE FROM user_inventory")       # ← Включая промокоды (ref_XXXX)
-        c.execute("DELETE FROM active_boosts")        # ← Бусты тоже
+        c.execute("DELETE FROM user_inventory")
+        c.execute("DELETE FROM active_boosts")
         c.execute("DELETE FROM sqlite_sequence")
         conn.commit(); conn.close()
-        
-        # Очищаем PostgreSQL (бот)
-        from database import execute_query
-        await execute_query("UPDATE users SET invited_by = NULL")  # ← СНАЧАЛА сброс рефералов
-        await execute_query("DELETE FROM users")
-        await execute_query("DELETE FROM game_history")
-        await execute_query("DELETE FROM crypto_transactions")
-        await execute_query("DELETE FROM deposits")
-        await execute_query("DELETE FROM agreements")
-        await execute_query("DELETE FROM achievements")
         
         await callback.message.edit_text(
             f"✅ <b>База данных полностью очищена!</b>\n\n"
             f"📁 Бэкап сохранён: <code>{backup_name}</code>\n"
-            f"🔄 SQLite и PostgreSQL очищены",
+            f"🔄 SQLite очищена",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]])
         )
@@ -303,12 +385,22 @@ async def admin_clear_db_confirm_callback(callback: types.CallbackQuery):
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Вернуться в админ-панель", callback_data="admin_back")]])
         )
-        
+
 # ---------- ОТМЕНА И НАЗАД ----------
 @router.callback_query(F.data == "admin_cancel")
 async def admin_cancel(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear(); await callback.message.edit_text("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard()); await callback.answer()
+    await state.clear()
+    try:
+        await callback.message.edit_text("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
+    except:
+        pass
+    await callback.answer()
 
 @router.callback_query(F.data == "admin_back")
 async def admin_back(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear(); await callback.message.edit_text("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard()); await callback.answer()
+    await state.clear()
+    try:
+        await callback.message.edit_text("👑 Админ-панель\n\nВыберите действие:", reply_markup=admin_main_keyboard())
+    except:
+        pass
+    await callback.answer()
